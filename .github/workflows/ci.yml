@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy (default features)
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: clippy (all features)
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - name: test (default features)
+        run: cargo test --locked
+      - name: test (all features)
+        run: cargo test --all-features --locked
+      - name: doc
+        run: cargo doc --no-deps --all-features --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: publish dry run
+        run: cargo publish --dry-run --all-features --locked
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+      - uses: Swatinem/rust-cache@v2
+      - name: check on MSRV (1.85)
+        # Library only: dev-dependencies (wiremock) need a newer compiler.
+        run: cargo check --all-features --locked
