@@ -206,27 +206,12 @@ impl RotatingClient {
                 proxy_idx.map(|idx| inner.proxies.redacted(idx))
             );
 
-            // When a proxy is to blame and another one is out of cooldown,
-            // the next attempt goes through a different machine: nothing to
-            // wait for. Excluding the one that just failed matters at a
-            // zero cooldown, where it would otherwise count as its own
-            // healthy alternative. With no other proxy available, retries
-            // are paced by the backoff like the single-proxy case, instead
-            // of hammering a dead endpoint back to back.
-            let switch_delay = |attempt: u32, idx: usize| {
-                if inner.proxies.any_healthy_except(idx) {
-                    Duration::ZERO
-                } else {
-                    backoff_delay(attempt, inner.backoff_base, inner.backoff_max)
-                }
-            };
-
             match client.execute(current).await {
                 Ok(response) => {
                     let status = response.status();
-                    let proxy_issue = proxy_idx.is_some() && is_proxy_failure_status(status);
-                    match (proxy_issue, proxy_idx) {
-                        (true, Some(idx)) => {
+                    let blamed_proxy = proxy_idx.filter(|_| is_proxy_failure_status(status));
+                    match (blamed_proxy, proxy_idx) {
+                        (Some(idx), _) => {
                             trace_log!(
                                 "proxy {} answered {status}: cooling it down",
                                 inner.proxies.redacted(idx)
@@ -235,16 +220,17 @@ impl RotatingClient {
                         }
                         // Any other status is the origin's answer, which means this proxy
                         // forwarded the request: it works, whatever an older failure said.
-                        (false, Some(idx)) => inner.proxies.mark_good_index(idx),
+                        (None, Some(idx)) => inner.proxies.mark_good_index(idx),
                         _ => {}
                     }
-                    if is_last_attempt || !(proxy_issue || is_retryable_status(status, idempotent))
+                    if is_last_attempt
+                        || !(blamed_proxy.is_some() || is_retryable_status(status, idempotent))
                     {
                         return Ok(response);
                     }
 
-                    let delay = if let (true, Some(idx)) = (proxy_issue, proxy_idx) {
-                        switch_delay(attempt, idx)
+                    let delay = if let Some(idx) = blamed_proxy {
+                        switch_delay(inner, attempt, idx)
                     } else {
                         match retry_after(response.headers()) {
                             Some(asked) if asked > inner.max_retry_after => {
@@ -267,8 +253,8 @@ impl RotatingClient {
                     // A transport failure seen through a proxy is the
                     // proxy's fault, whether or not this request can be
                     // retried.
-                    let proxy_failed = proxy_idx.is_some() && is_transport_error(&err);
-                    if let (true, Some(idx)) = (proxy_failed, proxy_idx) {
+                    let blamed_proxy = proxy_idx.filter(|_| is_transport_error(&err));
+                    if let Some(idx) = blamed_proxy {
                         trace_log!(
                             "proxy {} failed ({}): cooling it down",
                             inner.proxies.redacted(idx),
@@ -280,8 +266,8 @@ impl RotatingClient {
                         return Err(Error::Reqwest(err));
                     }
 
-                    let delay = if let (true, Some(idx)) = (proxy_failed, proxy_idx) {
-                        switch_delay(attempt, idx)
+                    let delay = if let Some(idx) = blamed_proxy {
+                        switch_delay(inner, attempt, idx)
                     } else {
                         backoff_delay(attempt, inner.backoff_base, inner.backoff_max)
                     };
@@ -294,6 +280,20 @@ impl RotatingClient {
 
             attempt = attempt.saturating_add(1);
         }
+    }
+}
+
+/// Delay before the next attempt after blaming proxy `idx` for this one.
+/// Zero when another proxy is out of cooldown, since the next attempt
+/// already lands on different hardware and there is nothing to wait for;
+/// excluding `idx` itself matters at a zero cooldown, where it would
+/// otherwise count as its own healthy alternative. The usual backoff
+/// otherwise, so a lone dead proxy is not hammered back to back.
+fn switch_delay(inner: &Inner, attempt: u32, idx: usize) -> Duration {
+    if inner.proxies.any_healthy_except(idx) {
+        Duration::ZERO
+    } else {
+        backoff_delay(attempt, inner.backoff_base, inner.backoff_max)
     }
 }
 
