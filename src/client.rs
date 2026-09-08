@@ -25,12 +25,6 @@ const DEFAULT_PROXY_COOLDOWN: Duration = Duration::from_secs(60);
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Longest backoff base, backoff cap or `Retry-After` bound accepted.
-/// Anything above it (only absurd values such as `Duration::MAX`) is
-/// treated as this, so an oversized base, cap or bound can't turn a retry
-/// into a wait nobody will ever see.
-const MAX_BACKOFF: Duration = Duration::from_secs(60 * 60 * 24 * 365);
-
 /// Roughly how much of a retryable response's body is read before the
 /// retry, so the connection can go back to the pool. Reading stops after
 /// the chunk that crosses this budget, so the actual count can run a
@@ -202,7 +196,7 @@ impl RotatingClient {
             };
             trace_log!(
                 "attempt {attempt} url={} proxy={:?}",
-                crate::proxy::log_url(current.url()),
+                log_url(current.url()),
                 proxy_idx.map(|idx| inner.proxies.redacted(idx))
             );
 
@@ -295,6 +289,21 @@ fn switch_delay(inner: &Inner, attempt: u32, idx: usize) -> Duration {
     } else {
         backoff_delay(attempt, inner.backoff_base, inner.backoff_max)
     }
+}
+
+/// Renders a request URL for log lines: scheme, host, explicit port and
+/// path. Userinfo, query and fragment are dropped; that is where callers
+/// keep their secrets.
+#[cfg_attr(not(feature = "tracing"), allow(dead_code))]
+fn log_url(url: &reqwest::Url) -> String {
+    use std::fmt::Write;
+
+    let mut out = format!("{}://{}", url.scheme(), url.host_str().unwrap_or(""));
+    if let Some(port) = url.port() {
+        let _ = write!(out, ":{port}");
+    }
+    out.push_str(url.path());
+    out
 }
 
 /// Reads roughly [`DRAIN_BUDGET`] bytes of a response body that is about
@@ -575,15 +584,15 @@ impl RotatingClientBuilder {
                 backoff_base: self
                     .backoff_base
                     .unwrap_or(DEFAULT_BACKOFF_BASE)
-                    .min(MAX_BACKOFF),
+                    .min(crate::MAX_DURATION),
                 backoff_max: self
                     .backoff_max
                     .unwrap_or(DEFAULT_BACKOFF_MAX)
-                    .min(MAX_BACKOFF),
+                    .min(crate::MAX_DURATION),
                 max_retry_after: self
                     .max_retry_after
                     .unwrap_or(DEFAULT_MAX_RETRY_AFTER)
-                    .min(MAX_BACKOFF),
+                    .min(crate::MAX_DURATION),
                 proxy_cooldown: self.proxy_cooldown.unwrap_or(DEFAULT_PROXY_COOLDOWN),
             }),
         })
@@ -600,8 +609,8 @@ mod tests {
             .backoff(Duration::MAX, Duration::MAX)
             .build()
             .unwrap();
-        assert_eq!(client.inner.backoff_base, MAX_BACKOFF);
-        assert_eq!(client.inner.backoff_max, MAX_BACKOFF);
+        assert_eq!(client.inner.backoff_base, crate::MAX_DURATION);
+        assert_eq!(client.inner.backoff_max, crate::MAX_DURATION);
     }
 
     #[test]
@@ -624,7 +633,7 @@ mod tests {
             .max_retry_after(Duration::MAX)
             .build()
             .unwrap();
-        assert_eq!(client.inner.max_retry_after, MAX_BACKOFF);
+        assert_eq!(client.inner.max_retry_after, crate::MAX_DURATION);
     }
 
     #[test]
@@ -633,5 +642,25 @@ mod tests {
         assert_eq!(spend(10, 4), 6);
         assert_eq!(spend(1, 0), 0);
         assert_eq!(spend(3, 10), 0);
+    }
+
+    #[test]
+    fn log_url_keeps_only_scheme_host_port_path() {
+        assert_eq!(
+            log_url(&reqwest::Url::parse("http://u:p@h:8080/v1/data?api_key=SECRET#f").unwrap()),
+            "http://h:8080/v1/data"
+        );
+        assert_eq!(
+            log_url(&reqwest::Url::parse("http://h/path").unwrap()),
+            "http://h/path"
+        );
+        assert_eq!(
+            log_url(&reqwest::Url::parse("https://h:443/").unwrap()),
+            "https://h/"
+        );
+        assert_eq!(
+            log_url(&reqwest::Url::parse("http://[::1]:8080/p").unwrap()),
+            "http://[::1]:8080/p"
+        );
     }
 }

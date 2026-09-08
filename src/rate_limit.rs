@@ -23,11 +23,6 @@ const PRUNE_SPACING_MULTIPLE: u32 = 10;
 /// dead slots pile up before a scan.
 const MAX_PRUNE_SPACING: Duration = Duration::from_secs(1);
 
-/// Longest interval accepted. Anything above it (only absurd values such
-/// as `Duration::MAX`) is treated as this, so the slot arithmetic can't
-/// overflow and silently turn into "no limit".
-const MAX_INTERVAL: Duration = Duration::from_secs(60 * 60 * 24 * 365);
-
 /// Serializes requests to the same host so that no two requests to it start
 /// less than `min_interval` apart. `None` (or a zero interval) disables
 /// rate limiting entirely.
@@ -52,7 +47,7 @@ impl RateLimiter {
         Self {
             min_interval: min_interval
                 .filter(|interval| !interval.is_zero())
-                .map(|interval| interval.min(MAX_INTERVAL)),
+                .map(|interval| interval.min(crate::MAX_DURATION)),
             state: Mutex::new(State {
                 last: HashMap::new(),
                 next_prune: None,
@@ -235,7 +230,7 @@ mod tests {
         limiter.wait("example.com").await;
         let start = Instant::now();
         limiter.wait("example.com").await;
-        assert_eq!(Instant::now() - start, MAX_INTERVAL);
+        assert_eq!(Instant::now() - start, crate::MAX_DURATION);
     }
 
     #[tokio::test(start_paused = true)]

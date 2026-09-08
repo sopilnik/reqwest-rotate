@@ -110,6 +110,13 @@ mod proxy;
 mod rate_limit;
 mod retry;
 
+/// Longest duration any knob in this crate honours. Anything above it
+/// (only absurd values such as `Duration::MAX`) is treated as this, so
+/// no arithmetic on a configured duration can overflow and quietly turn
+/// a limit into no limit at all.
+pub(crate) const MAX_DURATION: std::time::Duration =
+    std::time::Duration::from_secs(60 * 60 * 24 * 365);
+
 pub use client::{RotatingClient, RotatingClientBuilder};
 pub use error::Error;
 pub use proxy::ProxyList;

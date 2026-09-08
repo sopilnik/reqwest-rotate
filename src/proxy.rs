@@ -7,11 +7,6 @@ use std::time::{Duration, Instant};
 
 use crate::error::Error;
 
-/// Cooldown applied instead of a requested one that would overflow
-/// `Instant` arithmetic (only reachable with absurd values such as
-/// `Duration::MAX`).
-const MAX_COOLDOWN: Duration = Duration::from_secs(60 * 60 * 24 * 365);
-
 /// A pool of proxy URLs rotated round-robin, with a cooldown applied to
 /// proxies that were recently marked bad (e.g. after a connect failure or a
 /// `407` response from the proxy itself).
@@ -207,7 +202,7 @@ impl ProxyList {
         let now = Instant::now();
         let until = now
             .checked_add(cooldown)
-            .or_else(|| now.checked_add(MAX_COOLDOWN))
+            .or_else(|| now.checked_add(crate::MAX_DURATION))
             .unwrap_or(now);
         self.lock().bad_until[idx] = Some(until);
     }
@@ -277,21 +272,6 @@ pub(crate) fn redact_userinfo(url: &str) -> String {
         Some(scheme) => format!("{scheme}://***@{host}{tail}"),
         None => format!("***@{host}{tail}"),
     }
-}
-
-/// Renders a request URL for log lines: scheme, host, explicit port and
-/// path. Userinfo, query and fragment are dropped; that is where callers
-/// keep their secrets.
-#[cfg_attr(not(feature = "tracing"), allow(dead_code))]
-pub(crate) fn log_url(url: &reqwest::Url) -> String {
-    use std::fmt::Write;
-
-    let mut out = format!("{}://{}", url.scheme(), url.host_str().unwrap_or(""));
-    if let Some(port) = url.port() {
-        let _ = write!(out, ":{port}");
-    }
-    out.push_str(url.path());
-    out
 }
 
 /// Redacts a proxy spelling that `Url::parse` rejected: the authority's
@@ -568,26 +548,6 @@ mod tests {
         assert_eq!(
             redact_userinfo("http://u:p@h/@path?x=@y"),
             "http://***@h/@path?x=@y"
-        );
-    }
-
-    #[test]
-    fn log_url_keeps_only_scheme_host_port_path() {
-        assert_eq!(
-            log_url(&reqwest::Url::parse("http://u:p@h:8080/v1/data?api_key=SECRET#f").unwrap()),
-            "http://h:8080/v1/data"
-        );
-        assert_eq!(
-            log_url(&reqwest::Url::parse("http://h/path").unwrap()),
-            "http://h/path"
-        );
-        assert_eq!(
-            log_url(&reqwest::Url::parse("https://h:443/").unwrap()),
-            "https://h/"
-        );
-        assert_eq!(
-            log_url(&reqwest::Url::parse("http://[::1]:8080/p").unwrap()),
-            "http://[::1]:8080/p"
         );
     }
 
