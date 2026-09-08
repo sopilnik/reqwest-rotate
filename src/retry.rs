@@ -7,6 +7,35 @@ use std::time::Duration;
 use reqwest::header::HeaderMap;
 use reqwest::{Method, StatusCode};
 
+/// A uniform fraction in `[0, 1)` for backoff jitter. Spreading retries
+/// apart is all this has to do, so it is a SplitMix64 step over one
+/// atomic counter rather than a cryptographic generator. The seed comes
+/// from `RandomState`, which the standard library already randomises per
+/// process, so two processes started together do not retry in lockstep.
+fn jitter_fraction() -> f64 {
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    const GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
+    static STATE: OnceLock<AtomicU64> = OnceLock::new();
+    let state = STATE.get_or_init(|| {
+        use std::hash::{BuildHasher, Hasher};
+        let seed = std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish();
+        AtomicU64::new(seed)
+    });
+
+    let mut z = state
+        .fetch_add(GAMMA, Ordering::Relaxed)
+        .wrapping_add(GAMMA);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    // 53 bits of mantissa is the whole precision an f64 in [0, 1) has.
+    (z >> 11) as f64 / (1u64 << 53) as f64
+}
+
 /// Computes the delay before a retry attempt using "full jitter" exponential
 /// backoff: a delay sampled uniformly from `[0, min(max, base * 2^attempt)]`.
 ///
@@ -18,7 +47,7 @@ pub(crate) fn backoff_delay(attempt: u32, base: Duration, max: Duration) -> Dura
     // so the exact multiplier no longer matters.
     let multiplier = 1u32.checked_shl(attempt).unwrap_or(u32::MAX);
     let capped = base.saturating_mul(multiplier).min(max);
-    capped.mul_f64(rand::random::<f64>())
+    capped.mul_f64(jitter_fraction())
 }
 
 /// Returns `true` for a status worth another attempt.
@@ -166,6 +195,20 @@ mod tests {
             .map(|_| backoff_delay(0, base, max))
             .any(|d| d > base.mul_f64(0.9));
         assert!(saw_a_large_sample);
+    }
+
+    #[test]
+    fn jitter_is_uniform_over_the_unit_interval() {
+        let samples: Vec<f64> = (0..100_000).map(|_| jitter_fraction()).collect();
+        for &sample in &samples {
+            assert!((0.0..1.0).contains(&sample), "{sample}");
+        }
+        let min = samples.iter().copied().fold(f64::INFINITY, f64::min);
+        let max = samples.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        assert!(min < 0.01, "min {min}");
+        assert!(max > 0.99, "max {max}");
+        let mean = samples.iter().sum::<f64>() / samples.len() as f64;
+        assert!((0.48..=0.52).contains(&mean), "mean {mean}");
     }
 
     #[test]

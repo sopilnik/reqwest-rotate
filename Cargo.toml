@@ -27,7 +27,6 @@ tracing = ["dep:tracing"]
 h2 = "0.4"
 httpdate = "1"
 hyper = { version = "1", default-features = false }
-rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "charset"] }
 thiserror = "2"
 tokio = { version = "1", default-features = false, features = ["time"] }
