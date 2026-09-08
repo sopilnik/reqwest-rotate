@@ -137,8 +137,10 @@ impl ProxyList {
     ///
     /// If every proxy is in cooldown, the one whose cooldown ends soonest
     /// is returned anyway: a proxy that might work beats no proxy at all.
-    /// A proxy that then answers is taken out of cooldown at once; the
-    /// others stay marked until their own cooldown expires.
+    /// A proxy that then answers a request sent through a
+    /// [`RotatingClient`](crate::RotatingClient) that rotates over this
+    /// list is taken out of cooldown at once; the others stay marked until
+    /// their own cooldown expires.
     pub fn pick(&self) -> Option<&str> {
         self.pick_index().map(|idx| self.proxies[idx].as_str())
     }
@@ -190,9 +192,9 @@ impl ProxyList {
     }
 
     /// Marks a proxy as bad for `cooldown`: [`pick`](Self::pick) will skip
-    /// it until the cooldown expires, unless every proxy is unhealthy. The
-    /// mark lasts until the cooldown expires or the proxy answers a
-    /// request sent through this client, whichever comes first.
+    /// it, unless every proxy is unhealthy, until the cooldown expires or
+    /// the proxy answers a request sent through a
+    /// [`RotatingClient`](crate::RotatingClient), whichever comes first.
     ///
     /// `proxy` is matched in canonical form, so both what
     /// [`pick`](Self::pick) returned and what you originally configured
@@ -212,6 +214,7 @@ impl ProxyList {
         let now = Instant::now();
         let until = now
             .checked_add(cooldown)
+            // A cooldown that overflows `Instant` is capped rather than dropped.
             .or_else(|| now.checked_add(crate::MAX_DURATION))
             .unwrap_or(now);
         self.lock().bad_until[idx] = Some(until);
@@ -285,7 +288,8 @@ pub(crate) fn redact_userinfo(url: &str) -> String {
 }
 
 /// Redacts a proxy spelling that `Url::parse` rejected: the authority's
-/// end is unknown, so everything up to the last `@` is treated as credentials.
+/// end is unknown, so everything up to the last `@` is treated as
+/// credentials.
 fn redact_unparsable(raw: &str) -> String {
     let Some(at) = raw.rfind('@') else {
         return raw.to_string();
@@ -477,12 +481,12 @@ mod tests {
         let list = list(&["http://a", "http://b"]);
         assert_eq!(list.pick(), Some("http://a/"));
         // The un-canonicalised spelling is accepted too.
-        assert!(list.mark_bad("http://b", Duration::from_millis(500)));
+        assert!(list.mark_bad("http://b", Duration::from_millis(50)));
         assert!(list.in_cooldown("http://b/"));
         assert!(list.in_cooldown("b"));
         // "b" is next in rotation but is in cooldown, so "a" is served again.
         assert_eq!(list.pick(), Some("http://a/"));
-        std::thread::sleep(Duration::from_millis(700));
+        std::thread::sleep(Duration::from_millis(80));
         assert!(!list.in_cooldown("http://b/"));
         assert_eq!(list.pick(), Some("http://b/"));
     }
@@ -529,8 +533,8 @@ mod tests {
         // Once a cooldown has actually expired (not just been set to a
         // duration too short to ever matter), the proxy it covers counts as
         // healthy again: "a" recovers while "b" (excluded above) stays bad.
-        pool.mark_bad("http://a", Duration::from_millis(500));
-        std::thread::sleep(Duration::from_millis(700));
+        pool.mark_bad("http://a", Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(80));
         assert!(pool.any_healthy_except(1));
 
         let single = list(&["http://a"]);

@@ -51,10 +51,11 @@
 //! - Transport errors that prove the request never reached the server:
 //!   connect failures (including connect timeouts), requests cancelled
 //!   before dispatch, HTTP/2 `REFUSED_STREAM`. Retried for every request.
-//! - Other transport errors (a total-request timeout, a connection closed
+//! - Other transport errors: a total-request timeout, a connection closed
 //!   or reset before the response arrived (the classic keep-alive race of
-//!   long-running scrapers), HTTP/2 `GOAWAY`/reset): only for idempotent
-//!   methods (`GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE`, `TRACE`).
+//!   long-running scrapers), an HTTP/2 `GOAWAY` or stream reset. Retried
+//!   only for idempotent methods (`GET`, `HEAD`, `OPTIONS`, `PUT`,
+//!   `DELETE`, `TRACE`).
 //!
 //! After the last attempt the response is returned as-is, whatever its
 //! status, and a transport error is returned as [`Error::Reqwest`]. Its
@@ -72,11 +73,11 @@
 //! the cooldown expires, or until it answers a request again, whichever
 //! comes first. A per-attempt timeout counts as the proxy's failure, since
 //! the client cannot tell a stalled proxy from a stalled origin; blaming
-//! it costs nothing once a single answer clears the mark. While another
-//! proxy is out of cooldown, the retry goes through it right away; once no
-//! other proxy is available, retries are paced by the backoff. Any other
-//! status is the origin's answer, and the proxy keeps its place in the
-//! rotation.
+//! it is cheap: the mark clears the first time the proxy answers again.
+//! While another proxy is out of cooldown, the retry goes through it right
+//! away; once no other proxy is available, retries are paced by the
+//! backoff. Any other status is the origin's answer, and the proxy keeps
+//! its place in the rotation.
 //!
 //! Only proxies you configure are used: the `HTTP_PROXY`, `HTTPS_PROXY`
 //! and `ALL_PROXY` environment variables are ignored. `http://` and
@@ -110,10 +111,11 @@ mod proxy;
 mod rate_limit;
 mod retry;
 
-/// Longest duration any knob in this crate honours. Anything above it
-/// (only absurd values such as `Duration::MAX`) is treated as this, so
-/// no arithmetic on a configured duration can overflow and quietly turn
-/// a limit into no limit at all.
+/// Longest duration this crate's clamped knobs honour, and the ceiling
+/// used when a configured duration would overflow `Instant` arithmetic.
+/// Anything above it (only absurd values such as `Duration::MAX`) is
+/// treated as this, so no arithmetic on a configured duration can
+/// quietly turn a limit into no limit at all.
 pub(crate) const MAX_DURATION: std::time::Duration =
     std::time::Duration::from_secs(60 * 60 * 24 * 365);
 

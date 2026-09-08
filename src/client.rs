@@ -91,6 +91,12 @@ impl RotatingClient {
     /// Sends a `GET` request to `url`, applying rate limiting, proxy
     /// rotation, and retries.
     ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Reqwest`] when the request cannot be built or when
+    /// the last attempt fails after the retries are used up; see
+    /// [`Error`] for the full set.
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -127,6 +133,12 @@ impl RotatingClient {
     /// Builds `request_builder` and sends it, applying rate limiting, proxy
     /// rotation, and retries. Use [`request`](Self::request) to get a
     /// builder for a method other than `GET`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Reqwest`] when the request cannot be built or when
+    /// the last attempt fails after the retries are used up; see
+    /// [`Error`] for the full set.
     pub async fn send(&self, request_builder: reqwest::RequestBuilder) -> Result<Response, Error> {
         let request = request_builder.build()?;
         self.send_with_retry(request).await
@@ -134,6 +146,11 @@ impl RotatingClient {
 
     /// Sends a pre-built [`reqwest::Request`], applying rate limiting,
     /// proxy rotation, and retries.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Reqwest`] when the last attempt fails after the
+    /// retries are used up; see [`Error`] for the full set.
     pub async fn execute(&self, request: Request) -> Result<Response, Error> {
         self.send_with_retry(request).await
     }
@@ -311,7 +328,9 @@ fn log_url(url: &reqwest::Url) -> String {
 /// Reads roughly [`DRAIN_BUDGET`] bytes of a response body that is about
 /// to be retried. A body that ends within the budget hands its connection
 /// back to the pool; a longer one is dropped mid-stream, which costs a
-/// reconnect on HTTP/1 or a reset stream on HTTP/2.
+/// reconnect on HTTP/1 or a reset stream on HTTP/2. Every chunk is charged
+/// at least one unit, so a stream of empty chunks cannot keep the drain
+/// alive.
 async fn drain(mut response: Response) {
     let mut budget = DRAIN_BUDGET;
     while budget > 0 {
@@ -387,8 +406,9 @@ impl RotatingClientBuilder {
     /// Each proxy gets its own underlying `reqwest::Client`, built eagerly
     /// with its own connection pool and TLS configuration. For pools of
     /// hundreds of proxies, share one TLS config across them via
-    /// [`configure`](Self::configure) and
-    /// [`use_preconfigured_tls`](reqwest::ClientBuilder::use_preconfigured_tls).
+    /// [`configure`](Self::configure) and [`use_preconfigured_tls`][upt].
+    ///
+    /// [upt]: reqwest::ClientBuilder::use_preconfigured_tls
     #[must_use]
     pub fn proxies<I, S>(mut self, proxies: I) -> Self
     where
@@ -462,7 +482,8 @@ impl RotatingClientBuilder {
         self
     }
 
-    /// How long a proxy is skipped after it fails. Default: 60 s. Zero
+    /// How long a proxy is skipped after it fails, at most: the mark also
+    /// clears the first time the proxy answers again. Default: 60 s. Zero
     /// never takes a proxy out of rotation, but a retry with nowhere else
     /// to go is still paced by the backoff.
     #[must_use]
@@ -523,7 +544,9 @@ impl RotatingClientBuilder {
     /// use reqwest_rotate::RotatingClient;
     ///
     /// let client = RotatingClient::builder()
-    ///     .configure(|builder| builder.redirect(reqwest::redirect::Policy::none()))
+    ///     .configure(|builder| {
+    ///         builder.redirect(reqwest::redirect::Policy::none())
+    ///     })
     ///     .build()
     ///     .unwrap();
     /// # let _ = client;
