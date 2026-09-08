@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest_rotate::{Error, RotatingClient, RotatingClientBuilder};
+use reqwest_rotate::{Error, ProxyList, RotatingClient, RotatingClientBuilder};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -819,6 +819,28 @@ async fn proxy_407_cools_down_and_rotates() {
     assert_eq!(good_seen.load(Ordering::SeqCst), 1);
     assert!(client.proxies().in_cooldown(&auth_proxy));
     assert!(!client.proxies().in_cooldown(&good_proxy));
+}
+
+#[tokio::test]
+async fn a_proxy_that_answers_leaves_cooldown() {
+    let (first, first_seen) = raw_server(0, OK_RESPONSE).await;
+    let (second, _second_seen) = raw_server(0, OK_RESPONSE).await;
+
+    let pool = ProxyList::new([first.as_str(), second.as_str()]).unwrap();
+    // 60s vs. 120s: the first proxy's cooldown ends sooner, so it is
+    // unambiguously the fallback pick with both proxies cooling down.
+    pool.mark_bad(&first, Duration::from_secs(60));
+    pool.mark_bad(&second, Duration::from_secs(120));
+
+    let client = quick().proxy_list(pool).retries(0).build().unwrap();
+
+    // The target host never resolves: only a proxy can answer this.
+    let response = client.get("http://example.invalid/x").await.unwrap();
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(first_seen.load(Ordering::SeqCst), 1);
+    assert!(!client.proxies().in_cooldown(&first));
+    assert!(client.proxies().in_cooldown(&second));
 }
 
 #[tokio::test]

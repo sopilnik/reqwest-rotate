@@ -225,12 +225,18 @@ impl RotatingClient {
                 Ok(response) => {
                     let status = response.status();
                     let proxy_issue = proxy_idx.is_some() && is_proxy_failure_status(status);
-                    if let (true, Some(idx)) = (proxy_issue, proxy_idx) {
-                        trace_log!(
-                            "proxy {} answered {status}: cooling it down",
-                            inner.proxies.redacted(idx)
-                        );
-                        inner.proxies.mark_bad_index(idx, inner.proxy_cooldown);
+                    match (proxy_issue, proxy_idx) {
+                        (true, Some(idx)) => {
+                            trace_log!(
+                                "proxy {} answered {status}: cooling it down",
+                                inner.proxies.redacted(idx)
+                            );
+                            inner.proxies.mark_bad_index(idx, inner.proxy_cooldown);
+                        }
+                        // Any other status is the origin's answer, which means this proxy
+                        // forwarded the request: it works, whatever an older failure said.
+                        (false, Some(idx)) => inner.proxies.mark_good_index(idx),
+                        _ => {}
                     }
                     if is_last_attempt || !(proxy_issue || is_retryable_status(status, idempotent))
                     {

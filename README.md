@@ -42,9 +42,10 @@ rate-limited, retrying client with sane timeouts.
 
 **Proxy rotation.** Round-robin over the list you configure. A proxy that fails to
 connect, times out, drops the connection or answers `407` goes on cooldown and is
-skipped until it expires. If another proxy is out of cooldown the retry goes through
-it immediately; if none is, retries fall back to the backoff. Any other status is the
-origin's answer: you get it back, and the proxy stays healthy.
+skipped until the cooldown expires or the proxy answers again. If another proxy is out
+of cooldown the retry goes through it immediately; if none is, retries fall back to
+the backoff. Any other status is the origin's answer: you get it back, and the proxy
+stays healthy.
 
 Only the proxies you configure are used. `HTTP_PROXY` and friends are ignored.
 `http://`, `https://` and bare `host:port` work out of the box. `socks5://` and

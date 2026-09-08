@@ -132,6 +132,8 @@ impl ProxyList {
     ///
     /// If every proxy is in cooldown, the one whose cooldown ends soonest
     /// is returned anyway: a proxy that might work beats no proxy at all.
+    /// A proxy that then answers is taken out of cooldown at once; the
+    /// others stay marked until their own cooldown expires.
     pub fn pick(&self) -> Option<&str> {
         self.pick_index().map(|idx| self.proxies[idx].as_str())
     }
@@ -183,7 +185,9 @@ impl ProxyList {
     }
 
     /// Marks a proxy as bad for `cooldown`: [`pick`](Self::pick) will skip
-    /// it until the cooldown expires, unless every proxy is unhealthy.
+    /// it until the cooldown expires, unless every proxy is unhealthy. The
+    /// mark lasts until the cooldown expires or the proxy answers a
+    /// request sent through this client, whichever comes first.
     ///
     /// `proxy` is matched in canonical form, so both what
     /// [`pick`](Self::pick) returned and what you originally configured
@@ -206,6 +210,12 @@ impl ProxyList {
             .or_else(|| now.checked_add(MAX_COOLDOWN))
             .unwrap_or(now);
         self.lock().bad_until[idx] = Some(until);
+    }
+
+    /// Takes a proxy out of cooldown: it just answered, so whatever put it
+    /// there is stale. Recovery follows evidence rather than the clock.
+    pub(crate) fn mark_good_index(&self, idx: usize) {
+        self.lock().bad_until[idx] = None;
     }
 
     /// Returns `true` if `proxy` (in either form, see
@@ -482,13 +492,24 @@ mod tests {
     }
 
     #[test]
+    fn mark_good_index_clears_a_cooldown() {
+        let list = list(&["http://a", "http://b"]);
+        list.mark_bad("http://a", Duration::from_secs(60));
+        assert!(list.in_cooldown("http://a"));
+        list.mark_good_index(0);
+        assert!(!list.in_cooldown("http://a"));
+        assert_eq!(list.pick(), Some("http://a/"));
+    }
+
+    #[test]
     fn all_proxies_bad_returns_the_one_recovering_first() {
         let list = list(&["http://a", "http://b", "http://c"]);
         list.mark_bad("http://a", Duration::from_secs(60));
         list.mark_bad("http://b", Duration::from_secs(10));
         list.mark_bad("http://c", Duration::from_secs(60));
         assert_eq!(list.pick(), Some("http://b/"));
-        // Rotation continues from after the fallback pick.
+        // With every proxy cooling down, consecutive picks repeat the
+        // soonest-recovering one: nothing here has answered to clear it.
         assert_eq!(list.pick(), Some("http://b/"));
     }
 

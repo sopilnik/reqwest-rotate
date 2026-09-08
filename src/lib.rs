@@ -69,10 +69,14 @@
 //! Proxies are used round-robin. A proxy that fails at the transport level
 //! (connect failure, timeout, dropped or reset connection) or answers
 //! `407 Proxy Authentication Required` is put on cooldown and skipped until
-//! the cooldown expires. While another proxy is out of cooldown, the retry
-//! goes through it right away; once no other proxy is available, retries
-//! are paced by the backoff. Any other status is the origin's answer, and
-//! the proxy keeps its place in the rotation.
+//! the cooldown expires, or until it answers a request again, whichever
+//! comes first. A per-attempt timeout counts as the proxy's failure, since
+//! the client cannot tell a stalled proxy from a stalled origin; blaming
+//! it costs nothing once a single answer clears the mark. While another
+//! proxy is out of cooldown, the retry goes through it right away; once no
+//! other proxy is available, retries are paced by the backoff. Any other
+//! status is the origin's answer, and the proxy keeps its place in the
+//! rotation.
 //!
 //! Only proxies you configure are used: the `HTTP_PROXY`, `HTTPS_PROXY`
 //! and `ALL_PROXY` environment variables are ignored. `http://` and
