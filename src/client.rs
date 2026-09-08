@@ -83,6 +83,7 @@ impl RotatingClient {
     ///     .unwrap();
     /// # let _ = client;
     /// ```
+    #[must_use]
     pub fn builder() -> RotatingClientBuilder {
         RotatingClientBuilder::default()
     }
@@ -143,6 +144,7 @@ impl RotatingClient {
     /// Calling `pick()` on the returned list advances this client's
     /// rotation and clears an expired cooldown; `as_slice()`, `len()` and
     /// `in_cooldown()` are the read-only accessors.
+    #[must_use]
     pub fn proxies(&self) -> &ProxyList {
         &self.inner.proxies
     }
@@ -387,6 +389,7 @@ impl RotatingClientBuilder {
     /// hundreds of proxies, share one TLS config across them via
     /// [`configure`](Self::configure) and
     /// [`use_preconfigured_tls`](reqwest::ClientBuilder::use_preconfigured_tls).
+    #[must_use]
     pub fn proxies<I, S>(mut self, proxies: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -399,6 +402,7 @@ impl RotatingClientBuilder {
     /// Sets the proxy pool directly from a pre-built [`ProxyList`], e.g.
     /// one you validated up front or already put some proxies on cooldown
     /// in. Overrides [`proxies`](Self::proxies) if both are set.
+    #[must_use]
     pub fn proxy_list(mut self, proxy_list: ProxyList) -> Self {
         self.proxy_list = Some(proxy_list);
         self
@@ -419,14 +423,16 @@ impl RotatingClientBuilder {
     /// A call cancelled while it is queued for a host (a
     /// [`tokio::time::timeout`], say) gives its slot back, unless another
     /// call has already queued behind it.
-    pub fn rate_limit(mut self, interval: Duration) -> Self {
+    #[must_use]
+    pub const fn rate_limit(mut self, interval: Duration) -> Self {
         self.rate_limit = Some(interval);
         self
     }
 
     /// How many retries follow the first try. Default: 3, so up to 4
     /// attempts. `0` disables retries.
-    pub fn retries(mut self, retries: u32) -> Self {
+    #[must_use]
+    pub const fn retries(mut self, retries: u32) -> Self {
         self.retries = Some(retries);
         self
     }
@@ -436,7 +442,8 @@ impl RotatingClientBuilder {
     /// this client computes itself; a wait the server asks for in
     /// `Retry-After` is bounded separately by
     /// [`max_retry_after`](Self::max_retry_after).
-    pub fn backoff(mut self, base: Duration, max: Duration) -> Self {
+    #[must_use]
+    pub const fn backoff(mut self, base: Duration, max: Duration) -> Self {
         self.backoff_base = Some(base);
         self.backoff_max = Some(max);
         self
@@ -449,7 +456,8 @@ impl RotatingClientBuilder {
     /// backoff delay. If the server asks for more than this, the response
     /// is returned instead of retrying early against its wishes. Check the
     /// status and the header yourself in that case.
-    pub fn max_retry_after(mut self, max: Duration) -> Self {
+    #[must_use]
+    pub const fn max_retry_after(mut self, max: Duration) -> Self {
         self.max_retry_after = Some(max);
         self
     }
@@ -457,13 +465,15 @@ impl RotatingClientBuilder {
     /// How long a proxy is skipped after it fails. Default: 60 s. Zero
     /// never takes a proxy out of rotation, but a retry with nowhere else
     /// to go is still paced by the backoff.
-    pub fn proxy_cooldown(mut self, cooldown: Duration) -> Self {
+    #[must_use]
+    pub const fn proxy_cooldown(mut self, cooldown: Duration) -> Self {
         self.proxy_cooldown = Some(cooldown);
         self
     }
 
     /// `User-Agent` header sent with every request. Unset by default, in
     /// which case `reqwest` sends none.
+    #[must_use]
     pub fn user_agent(mut self, user_agent: impl Into<String>) -> Self {
         self.user_agent = Some(user_agent.into());
         self
@@ -482,14 +492,16 @@ impl RotatingClientBuilder {
     /// Pass something huge such as `Duration::MAX` to effectively disable
     /// it. Not recommended with proxies: one that accepts the connection
     /// and never answers would then hang a request forever.
-    pub fn timeout(mut self, timeout: Duration) -> Self {
+    #[must_use]
+    pub const fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
     }
 
     /// Timeout for establishing a TCP connection, to the proxy if one is
     /// used. Default: 10 s.
-    pub fn connect_timeout(mut self, timeout: Duration) -> Self {
+    #[must_use]
+    pub const fn connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = Some(timeout);
         self
     }
@@ -516,6 +528,7 @@ impl RotatingClientBuilder {
     ///     .unwrap();
     /// # let _ = client;
     /// ```
+    #[must_use]
     pub fn configure<F>(mut self, configure: F) -> Self
     where
         F: Fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder + Send + Sync + 'static,
@@ -526,6 +539,8 @@ impl RotatingClientBuilder {
 
     /// Builds the [`RotatingClient`], constructing one underlying
     /// `reqwest::Client` per configured proxy plus one direct client.
+    ///
+    /// # Errors
     ///
     /// Returns [`Error::InvalidProxy`] if a proxy URL is blank, cannot be
     /// parsed, or uses an unsupported scheme; or [`Error::Build`] if the

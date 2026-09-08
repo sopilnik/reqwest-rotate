@@ -56,6 +56,8 @@ impl ProxyList {
     /// `"http://user:pass@host:port"`. An empty iterator is valid and means
     /// "no proxies": [`pick`](Self::pick) then always returns `None`.
     ///
+    /// # Errors
+    ///
     /// Returns [`Error::InvalidProxy`] if an entry is blank, cannot be
     /// parsed as a URL, or uses an unsupported scheme.
     ///
@@ -95,16 +97,19 @@ impl ProxyList {
     }
 
     /// Returns `true` if no proxies were configured.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.proxies.is_empty()
     }
 
     /// Number of configured (distinct) proxies, regardless of cooldown state.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.proxies.len()
     }
 
     /// All configured proxy URLs, canonicalised, in rotation order.
+    #[must_use]
     pub fn as_slice(&self) -> &[String] {
         &self.proxies
     }
