@@ -1,6 +1,7 @@
 //! Round-robin proxy rotation with a cooldown for proxies that recently
 //! failed.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -73,9 +74,13 @@ impl ProxyList {
         S: AsRef<str>,
     {
         let mut normalized: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
         for proxy in proxies {
             let url = normalize_proxy_url(proxy.as_ref())?;
-            if !normalized.contains(&url) {
+            // Order is the rotation order, so the Vec stays; the set only
+            // answers "have I taken this one already" in O(1) instead of
+            // scanning.
+            if seen.insert(url.clone()) {
                 normalized.push(url);
             }
         }
@@ -445,6 +450,21 @@ mod tests {
     fn duplicates_are_dropped_keeping_first_position() {
         let list = list(&["http://a", "http://b", "http://a/", "b", "HTTP://A:80"]);
         assert_eq!(list.as_slice(), &["http://a/", "http://b/"]);
+    }
+
+    #[test]
+    fn dedup_holds_at_scale() {
+        // Every second entry repeats the one before it, so 2000 inputs
+        // collapse to 1000 distinct proxies. This exercises dedup at a size
+        // the other tests never reach; it is a correctness check, not a
+        // benchmark (no timing assertion here).
+        let proxies: Vec<String> = (0..2000)
+            .map(|i| format!("http://10.0.0.{}:{}", i / 2 % 256, 9000 + i / 2))
+            .collect();
+        let list = ProxyList::new(&proxies).unwrap();
+        assert_eq!(list.len(), 1000);
+        assert_eq!(list.as_slice()[0], "http://10.0.0.0:9000/");
+        assert_eq!(list.as_slice()[999], "http://10.0.0.231:9999/");
     }
 
     #[test]
