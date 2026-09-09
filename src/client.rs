@@ -409,7 +409,7 @@ impl RequestBuilder {
     ///
     /// Returns [`Error::Reqwest`] if the request could not be built, e.g.
     /// an invalid header or an unserialisable [`query`](Self::query),
-    /// [`form`](Self::form) or [`json`](Self::json) body.
+    /// [`form`](Self::form) or `json` body.
     pub fn build(self) -> Result<Request, Error> {
         Ok(self.inner.build()?)
     }
