@@ -311,7 +311,7 @@ fn redact_unparsable(raw: &str) -> String {
 fn normalize_proxy_url(raw: &str) -> Result<String, Error> {
     let raw = raw.trim();
     if raw.is_empty() {
-        return Err(Error::InvalidProxy("proxy URL is empty".to_string()));
+        return Err(Error::invalid_proxy(String::new(), "proxy URL is empty"));
     }
 
     // An explicit `scheme://` is taken at face value (and its scheme
@@ -336,7 +336,7 @@ fn normalize_proxy_url(raw: &str) -> Result<String, Error> {
         .filter(reqwest::Url::has_host)
         .ok_or_else(|| {
             let unparsable = redact_unparsable(raw);
-            Error::InvalidProxy(format!("{unparsable}: not a valid proxy URL"))
+            Error::invalid_proxy(unparsable, "not a valid proxy URL")
         })?;
 
     check_scheme(url.scheme(), &shown)?;
@@ -350,14 +350,16 @@ fn check_scheme(scheme: &str, shown: &str) -> Result<(), Error> {
             if cfg!(feature = "socks") {
                 Ok(())
             } else {
-                Err(Error::InvalidProxy(format!(
-                    "{shown}: SOCKS proxies need the `socks` feature of reqwest-rotate"
-                )))
+                Err(Error::invalid_proxy(
+                    shown,
+                    "SOCKS proxies need the `socks` feature of reqwest-rotate",
+                ))
             }
         }
-        other => Err(Error::InvalidProxy(format!(
-            "{shown}: unsupported proxy scheme `{other}`"
-        ))),
+        other => Err(Error::invalid_proxy(
+            shown,
+            format!("unsupported proxy scheme `{other}`"),
+        )),
     }
 }
 
@@ -389,18 +391,18 @@ mod tests {
     #[test]
     fn rejects_blank_proxy_entries() {
         let err = ProxyList::new(["  "]).unwrap_err();
-        assert!(matches!(err, Error::InvalidProxy(_)));
+        assert!(matches!(err, Error::InvalidProxy { .. }));
     }
 
     #[test]
     fn rejects_unparseable_and_unknown_schemes() {
         assert!(matches!(
             ProxyList::new(["not a valid proxy url"]).unwrap_err(),
-            Error::InvalidProxy(_)
+            Error::InvalidProxy { .. }
         ));
         assert!(matches!(
             ProxyList::new(["ftp://proxy.example:21"]).unwrap_err(),
-            Error::InvalidProxy(_)
+            Error::InvalidProxy { .. }
         ));
     }
 
@@ -442,10 +444,10 @@ mod tests {
     #[test]
     fn socks_is_rejected_without_the_feature() {
         let err = ProxyList::new(["socks5://127.0.0.1:1080"]).unwrap_err();
-        let Error::InvalidProxy(message) = err else {
+        let Error::InvalidProxy { .. } = &err else {
             panic!("expected InvalidProxy");
         };
-        assert!(message.contains("socks"), "{message}");
+        assert!(err.to_string().contains("socks"), "{err}");
     }
 
     #[cfg(feature = "socks")]

@@ -483,7 +483,7 @@ async fn invalid_proxy_url_is_rejected_at_build_time() {
         .build()
         .unwrap_err();
 
-    assert!(matches!(err, Error::InvalidProxy(_)));
+    assert!(matches!(err, Error::InvalidProxy { .. }));
 }
 
 #[cfg(not(feature = "socks"))]
@@ -494,7 +494,7 @@ async fn socks_proxy_is_rejected_without_the_feature() {
         .build()
         .unwrap_err();
 
-    assert!(matches!(err, Error::InvalidProxy(_)), "{err}");
+    assert!(matches!(err, Error::InvalidProxy { .. }), "{err}");
 }
 
 #[cfg(feature = "socks")]
