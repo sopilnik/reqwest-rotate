@@ -671,9 +671,12 @@ impl RotatingClientBuilder {
     /// this builder's own settings, so it can override them.
     ///
     /// Anything behind a `reqwest` cargo feature (`gzip`, `brotli`,
-    /// `cookies`, `json`, ...) needs that feature enabled on *your* `reqwest`
-    /// dependency; this crate only turns on `rustls-tls`, `http2` and
-    /// `charset`. Once enabled, `gzip`/`brotli` decoding is on by default
+    /// `cookies`, ...) needs that feature enabled on *your* `reqwest`
+    /// dependency; by default this crate turns on `rustls-tls`, `http2` and
+    /// `charset` (swap to the `native-tls` feature, with
+    /// `default-features = false`, for your platform's own TLS instead).
+    /// `json` and `multipart` are this crate's own features, forwarded to
+    /// `reqwest`'s. Once enabled, `gzip`/`brotli` decoding is on by default
     /// in `reqwest` and needs no call here.
     ///
     /// # Examples

@@ -93,8 +93,10 @@ such as `gzip`, `brotli`, `cookies` or `json` are enabled on your own `reqwest`
 dependency, as usual.
 
 `RotatingClient` is `Clone` (cheap; clones share pools, cooldowns and the rate
-limiter), `Send + Sync`, `#![forbid(unsafe_code)]`, TLS via `rustls`. An optional
-`tracing` feature, off by default, logs retries and proxy rotation at debug level.
+limiter), `Send + Sync`, `#![forbid(unsafe_code)]`, TLS via `rustls` by default —
+disable default features and enable `native-tls` instead to use your platform's own
+TLS. An optional `tracing` feature, off by default, logs retries and proxy rotation
+at debug level.
 
 ## Why not `reqwest-proxy-pool`?
 

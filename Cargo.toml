@@ -17,7 +17,13 @@ exclude = [".github/"]
 all-features = true
 
 [features]
-default = []
+default = ["rustls-tls"]
+# TLS via `rustls`, on by default. Turn off with `default-features = false`
+# and enable `native-tls` instead to use your platform's own TLS.
+rustls-tls = ["reqwest/rustls-tls"]
+# TLS via your platform's native library (OpenSSL, Secure Transport,
+# SChannel) instead of `rustls`.
+native-tls = ["reqwest/native-tls"]
 # Enables `socks4://`, `socks4a://`, `socks5://` and `socks5h://` proxies.
 socks = ["reqwest/socks"]
 # Enables `RequestBuilder::json`.
@@ -32,7 +38,7 @@ h2 = "0.4"
 http = "1"
 httpdate = "1"
 hyper = { version = "1", default-features = false }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "charset"] }
+reqwest = { version = "0.12", default-features = false, features = ["http2", "charset"] }
 serde = "1"
 thiserror = "2"
 tokio = { version = "1", default-features = false, features = ["time"] }
