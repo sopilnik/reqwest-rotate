@@ -551,9 +551,9 @@ impl RotatingClientBuilder {
     pub fn proxies<I, S>(mut self, proxies: I) -> Self
     where
         I: IntoIterator<Item = S>,
-        S: Into<String>,
+        S: AsRef<str>,
     {
-        self.proxies = proxies.into_iter().map(Into::into).collect();
+        self.proxies = proxies.into_iter().map(|s| s.as_ref().to_owned()).collect();
         self
     }
 
@@ -804,6 +804,19 @@ mod tests {
         assert!(!debug.contains("pass"), "{debug}");
         assert!(!debug.contains("ss@proxy"), "{debug}");
         assert!(debug.contains("***@proxy.example:3128"), "{debug}");
+    }
+
+    #[test]
+    fn proxies_accepts_a_slice_of_str_refs() {
+        // Compiling is the test: a caller who reads proxies into a
+        // `Vec<&str>` and passes `&proxies` (keeping ownership of the
+        // `Vec` for later use) used to hit `String: From<&&str>` is not
+        // satisfied, even though the equivalent `ProxyList::new(&proxies)`
+        // already accepted this shape via `AsRef<str>`.
+        let proxies: Vec<&str> = vec!["http://a", "http://b"];
+        let client = RotatingClient::builder().proxies(&proxies).build().unwrap();
+        assert_eq!(client.proxies().len(), 2);
+        assert_eq!(proxies.len(), 2);
     }
 
     #[test]
