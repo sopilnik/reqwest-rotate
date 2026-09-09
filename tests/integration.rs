@@ -546,7 +546,7 @@ async fn send_retries_a_post_with_body() {
     let request_builder = client
         .request(reqwest::Method::POST, format!("{}/submit", server.uri()))
         .body("payload=1");
-    let response = client.send(request_builder).await.unwrap();
+    let response = request_builder.send().await.unwrap();
 
     assert_eq!(response.status(), 200);
     assert_eq!(response.text().await.unwrap(), "accepted");
@@ -566,7 +566,7 @@ async fn post_is_not_retried_on_500() {
     let request_builder = client
         .request(reqwest::Method::POST, format!("{}/crashed", server.uri()))
         .body("payload=1");
-    let response = client.send(request_builder).await.unwrap();
+    let response = request_builder.send().await.unwrap();
 
     // The server may have processed it; replaying could duplicate it.
     assert_eq!(response.status(), 500);
@@ -593,7 +593,7 @@ async fn streaming_body_is_sent_once_without_retries() {
 
     // A body that cannot be replayed still goes out exactly once, and the
     // response comes back instead of an error.
-    let response = client.send(request_builder).await.unwrap();
+    let response = request_builder.send().await.unwrap();
     assert_eq!(response.status(), 500);
 }
 
@@ -640,7 +640,7 @@ async fn dropped_connection_is_not_retried_for_post() {
 
     let client = quick().retries(2).build().unwrap();
     let request_builder = client.request(reqwest::Method::POST, &url).body("x=1");
-    let err = client.send(request_builder).await.unwrap_err();
+    let err = request_builder.send().await.unwrap_err();
 
     assert!(matches!(err, Error::Reqwest(_)), "{err}");
     assert_eq!(connections.load(Ordering::SeqCst), 1);
@@ -783,7 +783,7 @@ async fn proxy_407_is_retried_for_a_post() {
     let request_builder = client
         .request(reqwest::Method::POST, "http://example.invalid/page")
         .body("x=1");
-    let response = client.send(request_builder).await.unwrap();
+    let response = request_builder.send().await.unwrap();
 
     assert_eq!(response.status(), 200);
     assert_eq!(response.text().await.unwrap(), "via-b");

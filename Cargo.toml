@@ -20,14 +20,20 @@ all-features = true
 default = []
 # Enables `socks4://`, `socks4a://`, `socks5://` and `socks5h://` proxies.
 socks = ["reqwest/socks"]
+# Enables `RequestBuilder::json`.
+json = ["reqwest/json"]
+# Enables `RequestBuilder::multipart`.
+multipart = ["reqwest/multipart"]
 # Debug-level `tracing` events for retries and proxy rotation.
 tracing = ["dep:tracing"]
 
 [dependencies]
 h2 = "0.4"
+http = "1"
 httpdate = "1"
 hyper = { version = "1", default-features = false }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "charset"] }
+serde = "1"
 thiserror = "2"
 tokio = { version = "1", default-features = false, features = ["time"] }
 tracing = { version = "0.1", optional = true }

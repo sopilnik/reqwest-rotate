@@ -4,6 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Request, Response};
 
 use crate::error::Error;
@@ -115,24 +116,29 @@ impl RotatingClient {
     }
 
     /// Starts building a request with an arbitrary method, using this
-    /// client's configuration (headers such as `User-Agent`). Send the
-    /// result through [`send`](Self::send) to get rate limiting, proxy
-    /// rotation, and retries; or call
-    /// [`.build()`](reqwest::RequestBuilder::build) yourself and pass the
-    /// result to [`execute`](Self::execute). Calling `.send()` on the
-    /// returned builder yourself bypasses rotation, rate limiting and
-    /// retries. Pass it to [`send`](Self::send) instead.
-    pub fn request(
-        &self,
-        method: reqwest::Method,
-        url: impl reqwest::IntoUrl,
-    ) -> reqwest::RequestBuilder {
-        self.inner.direct_client.request(method, url)
+    /// client's configuration (headers such as `User-Agent`). The returned
+    /// [`RequestBuilder`] wraps [`reqwest::RequestBuilder`]: call
+    /// [`send`](RequestBuilder::send) on it to route the request through
+    /// rate limiting, proxy rotation, and retries, the same as
+    /// [`get`](Self::get) does. Call [`build`](RequestBuilder::build)
+    /// instead if you only want the [`Request`], or
+    /// [`into_inner`](RequestBuilder::into_inner) to get the plain
+    /// `reqwest::RequestBuilder` back — its own `.send()` bypasses
+    /// rotation, rate limiting and retries, sending directly with no proxy.
+    pub fn request(&self, method: reqwest::Method, url: impl reqwest::IntoUrl) -> RequestBuilder {
+        RequestBuilder {
+            client: self.clone(),
+            inner: self.inner.direct_client.request(method, url),
+        }
     }
 
     /// Builds `request_builder` and sends it, applying rate limiting, proxy
-    /// rotation, and retries. Use [`request`](Self::request) to get a
-    /// builder for a method other than `GET`.
+    /// rotation, and retries. Takes a plain [`reqwest::RequestBuilder`],
+    /// e.g. one built directly against your own `reqwest::Client`, or a
+    /// [`RequestBuilder`] unwrapped with
+    /// [`into_inner`](RequestBuilder::into_inner). For the common case, call
+    /// [`send`](RequestBuilder::send) on the [`request`](Self::request)
+    /// result directly instead.
     ///
     /// # Errors
     ///
@@ -293,6 +299,138 @@ impl RotatingClient {
 
             attempt = attempt.saturating_add(1);
         }
+    }
+}
+
+/// A request builder returned by [`RotatingClient::request`].
+///
+/// This wraps [`reqwest::RequestBuilder`] instead of returning it directly:
+/// the reqwest idiom of calling `.send()` on a plain `RequestBuilder` would
+/// send the request from the direct client, with no proxy rotation, rate
+/// limiting or retries — silently doing the one thing a [`RotatingClient`]
+/// exists to prevent. Call [`send`](Self::send) here instead; it routes
+/// through the same retry loop as [`RotatingClient::get`].
+/// [`into_inner`](Self::into_inner) is the escape hatch for the rare case
+/// you want the plain builder anyway.
+#[derive(Debug)]
+#[must_use = "RequestBuilder does nothing until you call `send` or `build`"]
+pub struct RequestBuilder {
+    client: RotatingClient,
+    inner: reqwest::RequestBuilder,
+}
+
+impl RequestBuilder {
+    fn map(mut self, f: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder) -> Self {
+        self.inner = f(self.inner);
+        self
+    }
+
+    /// Adds a header. See [`reqwest::RequestBuilder::header`].
+    pub fn header<K, V>(self, key: K, value: V) -> Self
+    where
+        HeaderName: TryFrom<K>,
+        <HeaderName as TryFrom<K>>::Error: Into<http::Error>,
+        HeaderValue: TryFrom<V>,
+        <HeaderValue as TryFrom<V>>::Error: Into<http::Error>,
+    {
+        self.map(|b| b.header(key, value))
+    }
+
+    /// Adds a set of headers, merged into any already set. See
+    /// [`reqwest::RequestBuilder::headers`].
+    pub fn headers(self, headers: HeaderMap) -> Self {
+        self.map(|b| b.headers(headers))
+    }
+
+    /// Enables HTTP basic authentication. See
+    /// [`reqwest::RequestBuilder::basic_auth`].
+    pub fn basic_auth<U, P>(self, username: U, password: Option<P>) -> Self
+    where
+        U: fmt::Display,
+        P: fmt::Display,
+    {
+        self.map(|b| b.basic_auth(username, password))
+    }
+
+    /// Enables HTTP bearer authentication. See
+    /// [`reqwest::RequestBuilder::bearer_auth`].
+    pub fn bearer_auth<T>(self, token: T) -> Self
+    where
+        T: fmt::Display,
+    {
+        self.map(|b| b.bearer_auth(token))
+    }
+
+    /// Sets the request body. See [`reqwest::RequestBuilder::body`].
+    pub fn body<T: Into<reqwest::Body>>(self, body: T) -> Self {
+        self.map(|b| b.body(body))
+    }
+
+    /// Enables a per-request timeout, overriding the client's default. See
+    /// [`reqwest::RequestBuilder::timeout`].
+    pub fn timeout(self, timeout: Duration) -> Self {
+        self.map(|b| b.timeout(timeout))
+    }
+
+    /// Sets the HTTP version. See [`reqwest::RequestBuilder::version`].
+    pub fn version(self, version: reqwest::Version) -> Self {
+        self.map(|b| b.version(version))
+    }
+
+    /// Appends query parameters to the URL. See
+    /// [`reqwest::RequestBuilder::query`].
+    pub fn query<T: serde::Serialize + ?Sized>(self, query: &T) -> Self {
+        self.map(|b| b.query(query))
+    }
+
+    /// Sends a url-encoded form body. See
+    /// [`reqwest::RequestBuilder::form`].
+    pub fn form<T: serde::Serialize + ?Sized>(self, form: &T) -> Self {
+        self.map(|b| b.form(form))
+    }
+
+    /// Sends a JSON body. Needs the `json` feature. See
+    /// [`reqwest::RequestBuilder::json`].
+    #[cfg(feature = "json")]
+    pub fn json<T: serde::Serialize + ?Sized>(self, json: &T) -> Self {
+        self.map(|b| b.json(json))
+    }
+
+    /// Sends a `multipart/form-data` body. Needs the `multipart` feature.
+    /// See [`reqwest::RequestBuilder::multipart`].
+    #[cfg(feature = "multipart")]
+    pub fn multipart(self, form: reqwest::multipart::Form) -> Self {
+        self.map(|b| b.multipart(form))
+    }
+
+    /// Builds the [`Request`] without sending it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Reqwest`] if the request could not be built, e.g.
+    /// an invalid header or an unserialisable [`query`](Self::query),
+    /// [`form`](Self::form) or [`json`](Self::json) body.
+    pub fn build(self) -> Result<Request, Error> {
+        Ok(self.inner.build()?)
+    }
+
+    /// Sends the request, applying rate limiting, proxy rotation, and
+    /// retries — the same path as [`RotatingClient::get`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Reqwest`] when the request cannot be built or when
+    /// the last attempt fails after the retries are used up; see
+    /// [`Error`] for the full set.
+    pub async fn send(self) -> Result<Response, Error> {
+        self.client.send(self.inner).await
+    }
+
+    /// Escapes to the plain [`reqwest::RequestBuilder`]. Its own `.send()`
+    /// bypasses rate limiting, proxy rotation and retries, sending directly
+    /// with no proxy; pass it to [`RotatingClient::send`] to get them back.
+    pub fn into_inner(self) -> reqwest::RequestBuilder {
+        self.inner
     }
 }
 

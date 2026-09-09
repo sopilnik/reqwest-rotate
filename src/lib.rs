@@ -119,7 +119,7 @@ mod retry;
 pub(crate) const MAX_DURATION: std::time::Duration =
     std::time::Duration::from_secs(60 * 60 * 24 * 365);
 
-pub use client::{RotatingClient, RotatingClientBuilder};
+pub use client::{RequestBuilder, RotatingClient, RotatingClientBuilder};
 pub use error::Error;
 pub use proxy::ProxyList;
 

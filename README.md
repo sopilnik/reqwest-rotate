@@ -78,9 +78,14 @@ connections cannot hang a request forever. Both are configurable. They bound one
 attempt, not the whole call; wrap it in `tokio::time::timeout` for a hard overall
 budget.
 
-**Not just GET.** `request()`/`send()` route any method through the same rate limiting,
-rotation and retries as `get()`. `execute()` takes a pre-built `reqwest::Request`. A
-streaming body that cannot be cloned is sent once, without retries.
+**Not just GET.** `request()` returns a builder wrapping `reqwest::RequestBuilder`;
+calling `.send()` on it routes the request through the same rate limiting, rotation
+and retries as `get()`. (Calling `.send()` on a plain `reqwest::RequestBuilder` sends
+directly, with none of that — `request()` hands back a wrapper precisely so that
+mistake doesn't compile silently into a scraper that leaks its real IP.) `send()` on
+the client itself still takes a plain `reqwest::RequestBuilder`, for one built some
+other way. `execute()` takes a pre-built `reqwest::Request`. A streaming body that
+cannot be cloned is sent once, without retries.
 
 **Yours to tune.** `configure(|builder| ...)` applies any `reqwest::ClientBuilder`
 setting (default headers, redirect policy, TLS) to every underlying client. Features
