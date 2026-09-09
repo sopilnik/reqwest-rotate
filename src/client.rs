@@ -806,6 +806,54 @@ mod tests {
         assert!(debug.contains("***@proxy.example:3128"), "{debug}");
     }
 
+    /// `builder_debug_hides_credentials` above only covers the *builder*.
+    /// The struct a user actually holds onto and might log is
+    /// `RotatingClient` itself, whose `Debug` prints the built
+    /// `reqwest::Client`s: today the secret stays out only because
+    /// reqwest's own `Debug` happens to print a proxy's URI without its
+    /// userinfo. This pins that behaviour so a future reqwest release
+    /// changing it would fail this test instead of leaking silently.
+    #[test]
+    fn client_debug_hides_proxy_credentials() {
+        let client = RotatingClient::builder()
+            .proxies(["http://alice:s3cretpw@proxy.example:3128"])
+            .build()
+            .unwrap();
+        let debug = format!("{client:?}");
+        assert!(!debug.contains("s3cretpw"), "{debug}");
+        assert!(!debug.contains("YWxpY2U6czNjcmV0cHc="), "{debug}"); // base64("alice:s3cretpw")
+        assert!(debug.contains("***@proxy.example:3128"), "{debug}");
+    }
+
+    /// The README also promises credentials never reach error messages.
+    /// Port 1 is a reserved TCP port nothing listens on, so the connect
+    /// through the (bad) credentialed proxy fails immediately with no
+    /// server needed; walking the whole `source()` chain, not just the
+    /// top-level message, is the point: `reqwest::Error`'s own `Display`
+    /// is a layer or two above the connect failure that would actually
+    /// carry proxy details if reqwest ever started including them.
+    #[tokio::test]
+    async fn proxy_failure_error_chain_hides_credentials() {
+        let client = RotatingClient::builder()
+            .proxies(["http://alice:s3cretpw@127.0.0.1:1"])
+            .retries(0)
+            .build()
+            .unwrap();
+        let err = client.get("http://example.invalid/").await.unwrap_err();
+
+        let mut chain = err.to_string();
+        let mut source = std::error::Error::source(&err);
+        while let Some(e) = source {
+            chain.push_str(" <- ");
+            chain.push_str(&e.to_string());
+            source = e.source();
+        }
+
+        assert!(!chain.contains("s3cretpw"), "{chain}");
+        assert!(!chain.contains("YWxpY2U6czNjcmV0cHc="), "{chain}"); // base64("alice:s3cretpw")
+        assert!(!chain.contains("alice"), "{chain}");
+    }
+
     #[test]
     fn proxies_accepts_a_slice_of_str_refs() {
         // Compiling is the test: a caller who reads proxies into a
