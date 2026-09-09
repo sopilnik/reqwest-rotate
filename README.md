@@ -8,6 +8,27 @@ A small `reqwest` client wrapper for scrapers and API clients that need proxy
 rotation, per-host rate limiting, and retry-with-backoff, without pulling in
 a middleware framework: one `RotatingClient`, one builder, boring behavior.
 
+## Installation
+
+```sh
+cargo add reqwest-rotate
+```
+
+or add it to `Cargo.toml` directly:
+
+```toml
+[dependencies]
+reqwest-rotate = "0.1"
+```
+
+TLS defaults to `rustls`. To use your platform's own TLS library instead,
+turn off default features and enable `native-tls`:
+
+```toml
+[dependencies]
+reqwest-rotate = { version = "0.1", default-features = false, features = ["native-tls"] }
+```
+
 ## Example
 
 ```rust

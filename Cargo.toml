@@ -7,7 +7,6 @@ authors = ["Alexandr Sopilnik"]
 license = "MIT OR Apache-2.0"
 description = "A boring reqwest client wrapper: proxy rotation, per-host rate limiting, and retry-with-backoff."
 repository = "https://github.com/KsandrKj/reqwest-rotate"
-homepage = "https://github.com/KsandrKj/reqwest-rotate"
 readme = "README.md"
 keywords = ["reqwest", "proxy", "rate-limit", "retry", "scraping"]
 categories = ["web-programming::http-client"]
