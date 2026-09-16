@@ -4,6 +4,14 @@ All notable changes to this crate are documented in this file. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] - 2026-09-16
+
+### Changed
+
+- The repository now lives at `github.com/sopilnik/reqwest-rotate`
+  after the GitHub account was renamed. The crate metadata, the CI
+  badge and the changelog links point there. No code changes.
+
 ## [0.1.0] - 2026-09-09
 
 First release.
@@ -33,4 +41,5 @@ Also in this release:
   `socks4a://`, `socks5://` and `socks5h://` proxies, and `tracing`
   emits debug-level events for retries and proxy rotation.
 
+[0.1.1]: https://github.com/sopilnik/reqwest-rotate/releases/tag/v0.1.1
 [0.1.0]: https://github.com/sopilnik/reqwest-rotate/releases/tag/v0.1.0
