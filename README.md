@@ -2,7 +2,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/reqwest-rotate.svg)](https://crates.io/crates/reqwest-rotate)
 [![docs.rs](https://docs.rs/reqwest-rotate/badge.svg)](https://docs.rs/reqwest-rotate)
-[![CI](https://github.com/KsandrKj/reqwest-rotate/actions/workflows/ci.yml/badge.svg)](https://github.com/KsandrKj/reqwest-rotate/actions)
+[![CI](https://github.com/sopilnik/reqwest-rotate/actions/workflows/ci.yml/badge.svg)](https://github.com/sopilnik/reqwest-rotate/actions)
 
 A small `reqwest` client wrapper for scrapers and API clients that need proxy
 rotation, per-host rate limiting, and retry-with-backoff, without pulling in

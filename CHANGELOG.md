@@ -33,4 +33,4 @@ Also in this release:
   `socks4a://`, `socks5://` and `socks5h://` proxies, and `tracing`
   emits debug-level events for retries and proxy rotation.
 
-[0.1.0]: https://github.com/KsandrKj/reqwest-rotate/releases/tag/v0.1.0
+[0.1.0]: https://github.com/sopilnik/reqwest-rotate/releases/tag/v0.1.0
