@@ -1036,3 +1036,76 @@ async fn configure_hook_applies_to_the_underlying_clients() {
     let response = client.get(server.uri()).await.unwrap();
     assert_eq!(response.status(), 200);
 }
+
+#[tokio::test]
+async fn user_agent_is_sent() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(header("user-agent", "reqwest-rotate-tests/1"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = RotatingClient::builder()
+        .user_agent("reqwest-rotate-tests/1")
+        .build()
+        .unwrap();
+
+    let response = client.get(server.uri()).await.unwrap();
+    assert_eq!(response.status(), 200);
+}
+
+#[tokio::test]
+async fn each_retry_attempt_takes_its_own_rate_limit_slot() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/throttled"))
+        .respond_with(ResponseTemplate::new(503))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/throttled"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    // Backoff is tiny, so only two rate-limit slots (one per attempt) can
+    // explain a wait this long: a single slot shared across the retry
+    // would let the second attempt through immediately.
+    let client = quick()
+        .retries(1)
+        .rate_limit(Duration::from_millis(300))
+        .build()
+        .unwrap();
+
+    let start = tokio::time::Instant::now();
+    let response = client
+        .get(format!("{}/throttled", server.uri()))
+        .await
+        .unwrap();
+    let elapsed = tokio::time::Instant::now() - start;
+
+    assert_eq!(response.status(), 200);
+    assert!(
+        elapsed >= Duration::from_millis(300),
+        "elapsed = {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn zero_retries_sends_exactly_one_request_on_a_retryable_status() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/once"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = quick().retries(0).build().unwrap();
+    let response = client.get(format!("{}/once", server.uri())).await.unwrap();
+
+    assert_eq!(response.status(), 503);
+}
