@@ -410,8 +410,36 @@ mod tests {
         assert_eq!(error_kind(&err), "transport");
     }
 
-    // No test for error_kind's "never sent" branch: a canceled hyper request
-    // or an h2 REFUSED_STREAM needs a real HTTP/2 server, not a TcpListener.
+    #[tokio::test]
+    async fn error_kind_labels_a_refused_stream_as_never_sent() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Every stream gets refused, however many times reqwest's own
+        // built-in retry-on-NACK re-sends the request: the final error
+        // this test sees is still a REFUSED_STREAM either way.
+        tokio::spawn(async move {
+            let Ok((socket, _)) = listener.accept().await else {
+                return;
+            };
+            let Ok(mut conn) = h2::server::handshake(socket).await else {
+                return;
+            };
+            while let Some(Ok((_request, mut respond))) = conn.accept().await {
+                respond.send_reset(h2::Reason::REFUSED_STREAM);
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+        let err = client
+            .get(format!("http://{addr}/"))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(error_kind(&err), "never sent");
+    }
 
     #[test]
     fn retry_after_garbage_value_is_none() {
