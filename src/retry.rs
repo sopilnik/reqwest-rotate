@@ -101,11 +101,14 @@ pub(crate) fn is_transport_error(err: &reqwest::Error) -> bool {
         return false;
     }
     sources(err).any(|inner| {
+        // hyper wraps every HTTP/2 stream and connection error it doesn't
+        // treat as IO as its own non-user, non-parse error, so an h2 error
+        // never needs a downcast of its own here - the hyper branch has
+        // already matched by the time the chain reaches it.
         inner
             .downcast_ref::<hyper::Error>()
             .is_some_and(|e| !e.is_user() && !e.is_parse())
             || inner.downcast_ref::<std::io::Error>().is_some()
-            || inner.downcast_ref::<h2::Error>().is_some()
     })
 }
 
