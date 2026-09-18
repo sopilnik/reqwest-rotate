@@ -57,6 +57,10 @@
 //!   only for idempotent methods (`GET`, `HEAD`, `OPTIONS`, `PUT`,
 //!   `DELETE`, `TRACE`).
 //!
+//! reqwest's own retry layer is switched off on every client this crate
+//! builds, so `retries()` counts attempts exactly; pass a policy to
+//! [`configure`](RotatingClientBuilder::configure) to bring it back.
+//!
 //! After the last attempt the response is returned as-is, whatever its
 //! status, and a transport error is returned as [`Error::Reqwest`]. Its
 //! message is the short `request failed`; the cause is the error's

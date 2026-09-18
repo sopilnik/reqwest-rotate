@@ -4,6 +4,19 @@ All notable changes to this crate are documented in this file. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- `retries(n)` is now exact. reqwest's own retry layer is switched
+  off on every client this crate builds. Before, reqwest could
+  resend an HTTP/2 request after `REFUSED_STREAM` or
+  `GOAWAY(NO_ERROR)` up to twice under each attempt, and replay a
+  `POST` with a clonable body by its own rules instead of this
+  crate's.
+- The minimum supported `reqwest` is now 0.12.23, the first
+  release with `ClientBuilder::retry`.
+
 ## [0.1.1] - 2026-09-16
 
 ### Changed
@@ -41,5 +54,6 @@ Also in this release:
   `socks4a://`, `socks5://` and `socks5h://` proxies, and `tracing`
   emits debug-level events for retries and proxy rotation.
 
+[Unreleased]: https://github.com/sopilnik/reqwest-rotate/compare/v0.1.1...HEAD
 [0.1.1]: https://github.com/sopilnik/reqwest-rotate/releases/tag/v0.1.1
 [0.1.0]: https://github.com/sopilnik/reqwest-rotate/releases/tag/v0.1.0

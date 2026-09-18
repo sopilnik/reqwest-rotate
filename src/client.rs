@@ -592,7 +592,9 @@ impl RotatingClientBuilder {
     }
 
     /// How many retries follow the first try. Default: 3, so up to 4
-    /// attempts. `0` disables retries.
+    /// attempts. `0` disables retries. reqwest's own retry layer is off on
+    /// every client this builds, so the count is exact, unless
+    /// [`configure`](Self::configure) turns it back on.
     #[must_use]
     pub const fn retries(mut self, retries: u32) -> Self {
         self.retries = Some(retries);
@@ -672,7 +674,10 @@ impl RotatingClientBuilder {
     /// Applies your own settings to every underlying
     /// [`reqwest::ClientBuilder`] (one direct client plus one per proxy):
     /// default headers, redirect policy, TLS options, and so on. Runs after
-    /// this builder's own settings, so it can override them.
+    /// this builder's own settings, so it can override them. A `.retry(..)`
+    /// call in here overrides the crate's own `retry(never())`, bringing
+    /// reqwest's layer back and letting attempts multiply past what
+    /// [`retries`](Self::retries) counts.
     ///
     /// Anything behind a `reqwest` cargo feature (`gzip`, `brotli`,
     /// `cookies`, ...) needs that feature enabled on *your* `reqwest`
@@ -724,7 +729,13 @@ impl RotatingClientBuilder {
         let build_client = |proxy_url: Option<&str>| -> Result<reqwest::Client, Error> {
             let mut builder = reqwest::Client::builder()
                 .timeout(timeout)
-                .connect_timeout(connect_timeout);
+                .connect_timeout(connect_timeout)
+                // reqwest resends a refused or gracefully shut-down HTTP/2
+                // request on its own, below send_with_retry: attempts would
+                // multiply past what retries() promises, and a POST could
+                // be replayed against this crate's own idempotency rules.
+                // Set before configure() runs, so a policy set there wins.
+                .retry(reqwest::retry::never());
             if let Some(user_agent) = &self.user_agent {
                 builder = builder.user_agent(user_agent.as_str());
             }

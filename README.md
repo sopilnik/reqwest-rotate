@@ -83,7 +83,9 @@ dropped.
 `5xx` (except `501`/`505`), request timeouts and connections dropped before a response
 arrived are retried for idempotent methods only, so a `POST` is never duplicated. The
 one exception is a `407` from a proxy, which never forwarded the request. Connect
-failures and HTTP/2 `REFUSED_STREAM` are retried for everything.
+failures and HTTP/2 `REFUSED_STREAM` are retried for everything. reqwest's own retry
+layer is switched off, so `retries()` counts attempts exactly, unless `configure(..)`
+sets a policy of its own.
 
 Delays are full-jitter exponential with a configurable cap. A `Retry-After` header
 (seconds or HTTP-date) replaces the computed delay; ask for longer than

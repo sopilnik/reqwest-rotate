@@ -15,14 +15,13 @@ use reqwest_rotate::{Error, RotatingClient, RotatingClientBuilder};
 
 /// Builder with tiny backoff, configured to speak HTTP/2 straight away: the
 /// test server below expects the same prior knowledge, with no ALPN or
-/// `Upgrade:` dance. `reqwest` itself now retries a `REFUSED_STREAM` or a
-/// graceful `GOAWAY` transparently, for any method, before this crate ever
-/// sees an error; `retry(retry::never())` turns that off so these tests
-/// exercise `send_with_retry`'s own classification instead of reqwest's.
+/// `Upgrade:` dance. The production client already carries
+/// `retry(retry::never())`, so these tests exercise the same classification
+/// real callers get, not a test-only stand-in for it.
 fn quick() -> RotatingClientBuilder {
     RotatingClient::builder()
         .backoff(Duration::from_millis(5), Duration::from_millis(20))
-        .configure(|b| b.http2_prior_knowledge().retry(reqwest::retry::never()))
+        .configure(|b| b.http2_prior_knowledge())
 }
 
 /// What the server does with one stream, in the order [`h2_server`] is
@@ -87,6 +86,72 @@ async fn post_is_retried_after_a_refused_stream() {
 
     assert_eq!(response.status(), 200);
     assert_eq!(response.version(), Version::HTTP_2);
+    assert_eq!(response.text().await.unwrap(), "ok");
+    assert_eq!(seen.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn zero_retries_sends_a_post_exactly_once_on_a_refused_stream() {
+    let (url, seen) = h2_server(vec![
+        StreamAction::Reset(Reason::REFUSED_STREAM),
+        StreamAction::Reset(Reason::REFUSED_STREAM),
+        StreamAction::Reset(Reason::REFUSED_STREAM),
+    ])
+    .await;
+
+    let client = quick().retries(0).build().unwrap();
+    let err = client
+        .request(reqwest::Method::POST, &url)
+        .body("payload=1")
+        .send()
+        .await
+        .unwrap_err();
+
+    let Error::Reqwest(inner) = err else {
+        panic!("{err}")
+    };
+    assert!(!inner.is_timeout(), "{inner}");
+    assert_eq!(seen.load(Ordering::SeqCst), 1);
+}
+
+/// A policy set in `configure()` runs after the crate's own
+/// `retry(retry::never())` and replaces it, so reqwest's transparent replay
+/// comes back even with this crate's own `retries(0)`.
+#[tokio::test]
+async fn configure_can_bring_reqwests_own_retries_back() {
+    let (url, seen) = h2_server(vec![
+        StreamAction::Reset(Reason::REFUSED_STREAM),
+        StreamAction::Ok("ok"),
+    ])
+    .await;
+
+    let client = RotatingClient::builder()
+        .backoff(Duration::from_millis(5), Duration::from_millis(20))
+        .configure(|b| {
+            b.http2_prior_knowledge().retry(
+                reqwest::retry::for_host("127.0.0.1")
+                    .no_budget()
+                    .classify_fn(|req_rep| {
+                        if req_rep.error().is_some() {
+                            req_rep.retryable()
+                        } else {
+                            req_rep.success()
+                        }
+                    }),
+            )
+        })
+        .retries(0)
+        .build()
+        .unwrap();
+
+    let response = client
+        .request(reqwest::Method::POST, &url)
+        .body("payload=1")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
     assert_eq!(response.text().await.unwrap(), "ok");
     assert_eq!(seen.load(Ordering::SeqCst), 2);
 }
