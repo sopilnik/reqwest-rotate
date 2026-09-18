@@ -1303,6 +1303,32 @@ async fn request_builder_timeout_overrides_the_clients_default() {
     assert!(elapsed < Duration::from_secs(1), "elapsed = {elapsed:?}");
 }
 
+#[tokio::test]
+async fn connect_timeout_cuts_off_a_proxy_that_stalls_the_tunnel() {
+    let stalling_proxy = slow_server(Duration::from_secs(30)).await;
+
+    let client = RotatingClient::builder()
+        .proxies([stalling_proxy.as_str()])
+        .connect_timeout(Duration::from_millis(200))
+        .timeout(Duration::from_secs(2))
+        .retries(0)
+        .build()
+        .unwrap();
+
+    let start = tokio::time::Instant::now();
+    let err = client
+        .get("https://example.invalid/secure")
+        .await
+        .unwrap_err();
+    let elapsed = tokio::time::Instant::now() - start;
+
+    let Error::Reqwest(inner) = &err else {
+        panic!("expected Error::Reqwest, got {err:?}");
+    };
+    assert!(inner.is_connect(), "{err}");
+    assert!(elapsed < Duration::from_secs(1), "elapsed = {elapsed:?}");
+}
+
 #[test]
 fn request_builder_version_sets_the_built_requests_version() {
     let client = RotatingClient::builder().build().unwrap();
