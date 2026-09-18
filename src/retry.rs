@@ -109,10 +109,14 @@ pub(crate) fn is_transport_error(err: &reqwest::Error) -> bool {
     })
 }
 
-/// Returns `true` for a transport error that proves the server never
-/// received the request, so replaying it is safe even for a `POST`: a
-/// connect failure (including a connect timeout), a request `hyper`
-/// cancelled before dispatching it, or an HTTP/2 `REFUSED_STREAM`.
+/// Returns `true` for a transport error that proves the server never acted
+/// on the request, so replaying it is safe even for a `POST`: a connect
+/// failure (including a connect timeout), a request `hyper` cancelled
+/// before dispatching it, an HTTP/2 `REFUSED_STREAM`, or a remote
+/// `GOAWAY(NO_ERROR)` that left this stream unprocessed. A `GOAWAY` naming
+/// an actual error code does not qualify. The same stream-id rule covers
+/// it, but a server reporting its own fault may be wrong about what it
+/// processed, and a `POST` is not worth that risk.
 pub(crate) fn is_never_sent_error(err: &reqwest::Error) -> bool {
     if err.is_connect() {
         return true;
@@ -121,9 +125,11 @@ pub(crate) fn is_never_sent_error(err: &reqwest::Error) -> bool {
         inner
             .downcast_ref::<hyper::Error>()
             .is_some_and(hyper::Error::is_canceled)
-            || inner
-                .downcast_ref::<h2::Error>()
-                .is_some_and(|e| e.reason() == Some(h2::Reason::REFUSED_STREAM))
+            || inner.downcast_ref::<h2::Error>().is_some_and(|e| {
+                let unprocessed_go_away =
+                    e.is_go_away() && e.is_remote() && e.reason() == Some(h2::Reason::NO_ERROR);
+                e.reason() == Some(h2::Reason::REFUSED_STREAM) || unprocessed_go_away
+            })
     })
 }
 

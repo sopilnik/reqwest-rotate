@@ -48,14 +48,16 @@
 //!   through another one; a `Retry-After` on that `407` is deliberately
 //!   not honoured, since the wait belongs to the failed proxy, not to the
 //!   server.
-//! - Transport errors that prove the request never reached the server:
+//! - Transport errors that prove the server never acted on the request:
 //!   connect failures (including connect timeouts), requests cancelled
-//!   before dispatch, HTTP/2 `REFUSED_STREAM`. Retried for every request.
+//!   before dispatch, HTTP/2 `REFUSED_STREAM`, and a graceful HTTP/2
+//!   `GOAWAY(NO_ERROR)` that left this stream unprocessed. Retried for
+//!   every request.
 //! - Other transport errors: a total-request timeout, a connection closed
 //!   or reset before the response arrived (the classic keep-alive race of
-//!   long-running scrapers), an HTTP/2 `GOAWAY` or stream reset. Retried
-//!   only for idempotent methods (`GET`, `HEAD`, `OPTIONS`, `PUT`,
-//!   `DELETE`, `TRACE`).
+//!   long-running scrapers), an HTTP/2 `GOAWAY` naming an actual error
+//!   code, or a stream reset. Retried only for idempotent methods
+//!   (`GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE`, `TRACE`).
 //!
 //! reqwest's own retry layer is switched off on every client this crate
 //! builds, so `retries()` counts attempts exactly; pass a policy to

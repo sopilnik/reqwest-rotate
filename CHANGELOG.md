@@ -14,6 +14,10 @@ and this project uses [Semantic Versioning](https://semver.org/).
   `GOAWAY(NO_ERROR)` up to twice under each attempt, and replay a
   `POST` with a clonable body by its own rules instead of this
   crate's.
+- An HTTP/2 `GOAWAY(NO_ERROR)` that left a request unprocessed is
+  now retried for every method, including `POST`, like
+  `REFUSED_STREAM`. A `GOAWAY` naming an actual error code is
+  unchanged: idempotent methods only.
 - The minimum supported `reqwest` is now 0.12.23, the first
   release with `ClientBuilder::retry`.
 

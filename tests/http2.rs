@@ -217,12 +217,12 @@ async fn refused_stream_exhausts_retries() {
     assert_eq!(seen.load(Ordering::SeqCst), 3);
 }
 
-/// A server whose first connection sends a graceful `GOAWAY(NO_ERROR,
+/// A server whose first connection sends a graceful `GOAWAY(reason,
 /// last_stream_id=0)` before reading a single frame off it, leaving the
 /// request's own stream unprocessed; every later connection answers `200`.
 /// Returns the base URL and a counter of TCP connections accepted, so a
 /// test can tell whether a retry opened a second one.
-async fn goaway_then_ok_server() -> (String, Arc<AtomicUsize>) {
+async fn goaway_then_ok_server(reason: Reason) -> (String, Arc<AtomicUsize>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let connections = Arc::new(AtomicUsize::new(0));
@@ -237,7 +237,7 @@ async fn goaway_then_ok_server() -> (String, Arc<AtomicUsize>) {
                 continue;
             };
             if n == 1 {
-                conn.abrupt_shutdown(Reason::NO_ERROR);
+                conn.abrupt_shutdown(reason);
                 while conn.accept().await.is_some() {}
                 continue;
             }
@@ -252,13 +252,13 @@ async fn goaway_then_ok_server() -> (String, Arc<AtomicUsize>) {
     (url, connections)
 }
 
-/// Matches the crate doc's claim that a `GOAWAY` is "retried only for
-/// idempotent methods": with the request's own stream left unprocessed by
-/// the first connection's `GOAWAY(NO_ERROR)`, a `GET` is worth retrying on
-/// a fresh connection.
+/// The `GET` half of the pair below: the first connection's
+/// `GOAWAY(NO_ERROR)` leaves the request's own stream unprocessed, so the
+/// retry goes out on a fresh connection. Nothing here depends on the
+/// method, which is what the `POST` test next to it pins.
 #[tokio::test]
 async fn get_is_retried_after_an_unprocessed_goaway() {
-    let (url, connections) = goaway_then_ok_server().await;
+    let (url, connections) = goaway_then_ok_server(Reason::NO_ERROR).await;
 
     let client = quick().retries(1).build().unwrap();
     let response = client.get(&url).await.unwrap();
@@ -268,12 +268,33 @@ async fn get_is_retried_after_an_unprocessed_goaway() {
     assert_eq!(connections.load(Ordering::SeqCst), 2);
 }
 
-/// Same `GOAWAY(NO_ERROR)`, but for a `POST`: not `REFUSED_STREAM`, so it
-/// is not "never sent" either, and this crate only retries a plain
-/// transport error for idempotent methods. No second connection is opened.
+/// Same `GOAWAY(NO_ERROR)`, but for a `POST`: the request's own stream was
+/// never processed, so replaying it is as safe as a `REFUSED_STREAM` is,
+/// and this crate retries it on a fresh connection for every method.
 #[tokio::test]
-async fn post_is_not_retried_after_an_unprocessed_goaway() {
-    let (url, connections) = goaway_then_ok_server().await;
+async fn post_is_retried_after_an_unprocessed_goaway() {
+    let (url, connections) = goaway_then_ok_server(Reason::NO_ERROR).await;
+
+    let client = quick().retries(1).build().unwrap();
+    let response = client
+        .request(reqwest::Method::POST, &url)
+        .body("payload=1")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.text().await.unwrap(), "ok");
+    assert_eq!(connections.load(Ordering::SeqCst), 2);
+}
+
+/// A `GOAWAY` naming an actual error code stays an ordinary transport
+/// error. The stream-id rule covers it too, but a server reporting its
+/// own fault may be wrong about what it processed, so a `POST` is not
+/// replayed and gets no second connection.
+#[tokio::test]
+async fn post_is_not_retried_after_a_goaway_with_an_error_code() {
+    let (url, connections) = goaway_then_ok_server(Reason::INTERNAL_ERROR).await;
 
     let client = quick().retries(1).build().unwrap();
     let err = client
