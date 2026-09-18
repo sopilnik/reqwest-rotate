@@ -1,0 +1,30 @@
+[graph]
+# The native-tls feature brings in a tree of its own (openssl and friends)
+# that the default rustls build never sees, so check every feature.
+all-features = true
+
+[advisories]
+yanked = "deny"
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+]
+
+[bans]
+# Duplicate versions arrive through other crates' version requirements, so
+# there is nothing here to fix: warn, don't fail.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -25,7 +25,10 @@ cargo clippy --all-targets --no-default-features --features native-tls --locked 
 cargo test --locked
 cargo test --all-features --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features --locked
+cargo deny check
 ```
+
+Everything except the last line comes with rustup. For that one: `cargo install cargo-deny --locked`.
 
 Because of `--locked`, commit `Cargo.lock` if your change updates it.
 

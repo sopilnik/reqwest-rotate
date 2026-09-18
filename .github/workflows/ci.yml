@@ -4,12 +4,16 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Advisories, yanked crates and new stable clippy lints show up without
+  # any push, so run this on a schedule too.
+  schedule:
+    - cron: "17 6 * * 1"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 env:
@@ -52,3 +56,9 @@ jobs:
       - name: check on MSRV (1.85)
         # Library only: dev-dependencies (wiremock) need a newer compiler.
         run: cargo check --all-features --locked
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
