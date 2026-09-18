@@ -184,6 +184,10 @@ impl RotatingClient {
     async fn send_with_retry(&self, request: Request) -> Result<Response, Error> {
         let inner = &*self.inner;
         let idempotent = is_idempotent(request.method());
+        // The last attempt moves the request out; every earlier attempt only
+        // borrows it to clone. The loop always returns once it's been taken,
+        // but the borrow checker can't see that, hence the Option and the
+        // expects.
         let mut pending = Some(request);
         let mut attempt: u32 = 0;
 
