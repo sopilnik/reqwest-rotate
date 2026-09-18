@@ -741,6 +741,10 @@ impl RotatingClientBuilder {
             }
             match proxy_url {
                 Some(proxy_url) => {
+                    // ProxyList::new already ran this same string through
+                    // normalize_proxy_url, so this map_err is unreachable
+                    // today; kept in case a future reqwest release tightens
+                    // its own proxy URL parsing past ours.
                     let proxy = reqwest::Proxy::all(proxy_url).map_err(|e| {
                         Error::InvalidProxy {
                             proxy: crate::proxy::redact_userinfo(proxy_url),

@@ -144,6 +144,11 @@ impl Drop for Reservation<'_> {
                     }
                 }
                 None => {
+                    // Unreachable today: previous is None only for a
+                    // host's first reservation, whose target is now, so
+                    // wait() never reaches its await and clears `armed`
+                    // first. Still the right thing to do if an await ever
+                    // appears before that line.
                     state.last.remove(self.host);
                 }
             }
