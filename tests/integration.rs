@@ -1,8 +1,9 @@
 //! End-to-end tests against local servers: `wiremock` for ordinary HTTP
 //! behaviour, and a few raw TCP listeners for things `wiremock` cannot
-//! stand in for (a connection dropped mid-request, an HTTP proxy answering
-//! `407`). Proxy rotation and cooldown arithmetic are unit-tested directly
-//! on `ProxyList` in `src/proxy.rs`.
+//! stand in for (a connection dropped mid-request, an HTTP proxy
+//! answering `407`, a server that takes the request and then stalls).
+//! Proxy rotation and cooldown arithmetic are unit-tested directly on
+//! `ProxyList` in `src/proxy.rs`.
 //!
 //! These tests run on real time, not `start_paused`: the client now has a
 //! request timeout, and tokio's auto-advancing paused clock would fire that
@@ -883,6 +884,134 @@ async fn origin_403_does_not_blame_the_proxy() {
     assert_eq!(response.text().await.unwrap(), "denied");
     assert_eq!(seen.load(Ordering::SeqCst), 1);
     assert!(!client.proxies().in_cooldown(&proxy));
+}
+
+/// A server that accepts a connection, reads the request, waits `delay`,
+/// then closes the connection without ever answering: stands in for a
+/// proxy that took the connection but stalled, the way a per-attempt
+/// timeout is meant to catch.
+async fn slow_server(delay: Duration) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let mut buf = [0u8; 4096];
+            let _ = socket.read(&mut buf).await;
+            tokio::time::sleep(delay).await;
+            drop(socket);
+        }
+    });
+    url
+}
+
+#[tokio::test]
+async fn a_per_attempt_timeout_through_a_proxy_marks_it_bad() {
+    let slow_proxy = slow_server(Duration::from_millis(600)).await;
+
+    let client = RotatingClient::builder()
+        .proxies([slow_proxy.as_str()])
+        .timeout(Duration::from_millis(200))
+        .retries(0)
+        .build()
+        .unwrap();
+
+    let err = client.get("http://example.invalid/slow").await.unwrap_err();
+    assert!(
+        matches!(&err, Error::Reqwest(e) if e.is_timeout()),
+        "{err:?}"
+    );
+    assert!(client.proxies().in_cooldown(&slow_proxy));
+}
+
+#[tokio::test]
+async fn https_through_a_proxy_that_refuses_connect_is_a_connect_error() {
+    let (proxy, seen) = raw_server(
+        0,
+        b"HTTP/1.1 407 Proxy Authentication Required\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+    )
+    .await;
+
+    let client = RotatingClient::builder()
+        .proxies([proxy.as_str()])
+        .retries(0)
+        .build()
+        .unwrap();
+
+    let err = client
+        .get("https://example.invalid/secure")
+        .await
+        .unwrap_err();
+
+    let Error::Reqwest(inner) = &err else {
+        panic!("expected Error::Reqwest, got {err:?}");
+    };
+    assert!(inner.is_connect(), "{err}");
+    assert_eq!(seen.load(Ordering::SeqCst), 1);
+    assert!(client.proxies().in_cooldown(&proxy));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rotation_holds_up_under_concurrency() {
+    let (proxy_a, seen_a) = raw_server(0, OK_RESPONSE).await;
+    let (proxy_b, seen_b) = raw_server(0, OK_RESPONSE).await;
+
+    let client = RotatingClient::builder()
+        .proxies([proxy_a.as_str(), proxy_b.as_str()])
+        .retries(0)
+        .build()
+        .unwrap();
+
+    let mut tasks = Vec::new();
+    for _ in 0..8 {
+        let client = client.clone();
+        tasks.push(tokio::spawn(async move {
+            client.get("http://example.invalid/many").await
+        }));
+    }
+    for task in tasks {
+        assert!(task.await.unwrap().is_ok());
+    }
+
+    let a = seen_a.load(Ordering::SeqCst);
+    let b = seen_b.load(Ordering::SeqCst);
+    assert_eq!((a, b), (4, 4), "a={a} b={b}");
+}
+
+/// Unlike `rotation_holds_up_under_concurrency`, one proxy here never
+/// answers at all: every connection to it is dropped. The very first pick
+/// against a fresh pool is always index 0 (round robin starts there and
+/// nothing is cooling yet), so at least one of the eight tasks is
+/// guaranteed to draw it first and cool it down; a task's own failed
+/// attempt marks it bad before that same task's retry runs, so no task can
+/// draw it twice. Both properties hold regardless of how the eight tasks
+/// interleave, which is why the counts below are exact, not lower bounds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cooldown_holds_up_under_concurrency() {
+    let (dropping, _dropping_seen) = raw_server(usize::MAX, OK_RESPONSE).await;
+    let (healthy, healthy_seen) = raw_server(0, OK_RESPONSE).await;
+
+    let client = quick()
+        .proxies([dropping.as_str(), healthy.as_str()])
+        .retries(1)
+        .build()
+        .unwrap();
+
+    let mut tasks = Vec::new();
+    for _ in 0..8 {
+        let client = client.clone();
+        tasks.push(tokio::spawn(async move {
+            client.get("http://example.invalid/many").await
+        }));
+    }
+    for task in tasks {
+        assert!(task.await.unwrap().is_ok());
+    }
+
+    assert_eq!(healthy_seen.load(Ordering::SeqCst), 8);
+    assert!(client.proxies().in_cooldown(&dropping));
 }
 
 #[tokio::test]
