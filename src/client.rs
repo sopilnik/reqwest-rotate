@@ -663,8 +663,10 @@ impl RotatingClientBuilder {
         self
     }
 
-    /// Timeout for establishing a TCP connection, to the proxy if one is
-    /// used. Default: 10 s.
+    /// Timeout for establishing a connection, as one combined budget:
+    /// name resolution, the TCP handshake, the proxy handshake if one is
+    /// used (`CONNECT` for an HTTP proxy, the SOCKS exchange for a SOCKS
+    /// one), and any TLS handshake on top. Default: 10 s.
     #[must_use]
     pub const fn connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = Some(timeout);
