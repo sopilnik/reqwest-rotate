@@ -18,6 +18,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # aws-lc-sys, under reqwest's rustls feature, assembles with NASM on
+  # Windows; with none on the runner it must be allowed to use the
+  # prebuilt objects it ships instead. rustls already asks for that
+  # through a feature; this makes it explicit.
+  AWS_LC_SYS_PREBUILT_NASM: 1
 
 jobs:
   test:
