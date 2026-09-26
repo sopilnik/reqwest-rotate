@@ -455,6 +455,7 @@ impl RequestBuilder {
     /// Appends query parameters to the URL. Needs the `query` feature. See
     /// [`reqwest::RequestBuilder::query`].
     #[cfg(feature = "query")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "query")))]
     pub fn query<T: serde::Serialize + ?Sized>(self, query: &T) -> Self {
         self.map(|b| b.query(query))
     }
@@ -462,6 +463,7 @@ impl RequestBuilder {
     /// Sends a url-encoded form body. Needs the `form` feature. See
     /// [`reqwest::RequestBuilder::form`].
     #[cfg(feature = "form")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "form")))]
     pub fn form<T: serde::Serialize + ?Sized>(self, form: &T) -> Self {
         self.map(|b| b.form(form))
     }
@@ -469,6 +471,7 @@ impl RequestBuilder {
     /// Sends a JSON body. Needs the `json` feature. See
     /// [`reqwest::RequestBuilder::json`].
     #[cfg(feature = "json")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "json")))]
     pub fn json<T: serde::Serialize + ?Sized>(self, json: &T) -> Self {
         self.map(|b| b.json(json))
     }
@@ -476,6 +479,7 @@ impl RequestBuilder {
     /// Sends a `multipart/form-data` body. Needs the `multipart` feature.
     /// See [`reqwest::RequestBuilder::multipart`].
     #[cfg(feature = "multipart")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "multipart")))]
     pub fn multipart(self, form: reqwest::multipart::Form) -> Self {
         self.map(|b| b.multipart(form))
     }
