@@ -81,9 +81,10 @@ token passed as a query parameter stays out of the log too. A header you add you
 through `configure(|b| b.default_headers(..))` is not redacted this way; mark its
 `HeaderValue` sensitive if it needs to be.
 
-**Per-host rate limiting.** A minimum interval between requests to the same host,
-enforced with `tokio::time`. Concurrent callers to one host are serialized, not
-dropped.
+**Per-host rate limiting.** A minimum interval between requests to the same host
+name; port and scheme are not part of the key, so `http://` and `https://` traffic
+to one host shares a single schedule. Enforced with `tokio::time`. Concurrent
+callers to one host are serialized, not dropped.
 
 **Retry with backoff.** `408`, `429` and `503` are retried for every request. Other
 `5xx` (except `501`/`505`), request timeouts and connections dropped before a response

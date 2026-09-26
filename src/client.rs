@@ -658,10 +658,11 @@ impl RotatingClientBuilder {
         self
     }
 
-    /// Minimum interval between two requests to the same host name (port
-    /// and scheme are not part of the key). Unset by default, meaning no
-    /// rate limiting; zero disables it too. An interval over a year is
-    /// capped there.
+    /// Minimum interval between two requests to the same host name. Port
+    /// and scheme are not part of the key, on purpose: most limits are set
+    /// per host, so `http://` and `https://` to one host share a schedule.
+    /// Unset by default, meaning no rate limiting; zero disables it too. An
+    /// interval over a year is capped there.
     ///
     /// Every attempt, retries included, waits its turn: a call that
     /// retries twice takes three slots.
