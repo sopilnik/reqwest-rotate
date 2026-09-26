@@ -381,14 +381,16 @@ impl RequestBuilder {
         self.map(|b| b.version(version))
     }
 
-    /// Appends query parameters to the URL. See
+    /// Appends query parameters to the URL. Needs the `query` feature. See
     /// [`reqwest::RequestBuilder::query`].
+    #[cfg(feature = "query")]
     pub fn query<T: serde::Serialize + ?Sized>(self, query: &T) -> Self {
         self.map(|b| b.query(query))
     }
 
-    /// Sends a url-encoded form body. See
+    /// Sends a url-encoded form body. Needs the `form` feature. See
     /// [`reqwest::RequestBuilder::form`].
+    #[cfg(feature = "form")]
     pub fn form<T: serde::Serialize + ?Sized>(self, form: &T) -> Self {
         self.map(|b| b.form(form))
     }
@@ -412,8 +414,8 @@ impl RequestBuilder {
     /// # Errors
     ///
     /// Returns [`Error::Reqwest`] if the request could not be built, e.g.
-    /// an invalid header or an unserialisable [`query`](Self::query),
-    /// [`form`](Self::form) or `json` body.
+    /// an invalid header or an unserialisable `query`, `form` or `json`
+    /// body.
     pub fn build(self) -> Result<Request, Error> {
         Ok(self.inner.build()?)
     }
@@ -548,9 +550,10 @@ impl RotatingClientBuilder {
     /// Each proxy gets its own underlying `reqwest::Client`, built eagerly
     /// with its own connection pool and TLS configuration. For pools of
     /// hundreds of proxies, share one TLS config across them via
-    /// [`configure`](Self::configure) and [`use_preconfigured_tls`][upt].
+    /// [`configure`](Self::configure) and
+    /// [`tls_backend_preconfigured`][tbp].
     ///
-    /// [upt]: reqwest::ClientBuilder::use_preconfigured_tls
+    /// [tbp]: reqwest::ClientBuilder::tls_backend_preconfigured
     #[must_use]
     pub fn proxies<I, S>(mut self, proxies: I) -> Self
     where
@@ -683,12 +686,12 @@ impl RotatingClientBuilder {
     ///
     /// Anything behind a `reqwest` cargo feature (`gzip`, `brotli`,
     /// `cookies`, ...) needs that feature enabled on *your* `reqwest`
-    /// dependency; by default this crate turns on `rustls-tls`, `http2` and
+    /// dependency; by default this crate turns on `rustls`, `http2` and
     /// `charset` (swap to the `native-tls` feature, with
     /// `default-features = false`, for your platform's own TLS instead).
-    /// `json` and `multipart` are this crate's own features, forwarded to
-    /// `reqwest`'s. Once enabled, `gzip`/`brotli` decoding is on by default
-    /// in `reqwest` and needs no call here.
+    /// `query`, `form`, `json` and `multipart` are this crate's own
+    /// features, forwarded to `reqwest`'s. Once enabled, `gzip`/`brotli`
+    /// decoding is on by default in `reqwest` and needs no call here.
     ///
     /// # Examples
     ///

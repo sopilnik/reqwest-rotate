@@ -21,8 +21,10 @@ or add it to `Cargo.toml` directly:
 reqwest-rotate = "0.1"
 ```
 
-TLS defaults to `rustls`. To use your platform's own TLS library instead,
-turn off default features and enable `native-tls`:
+TLS defaults to `rustls` (`rustls-tls` still works as the old feature name),
+which checks certificates against the operating system's trust store: on Linux,
+install `ca-certificates` in a container image. To use your platform's own TLS
+library instead, turn off default features and enable `native-tls`:
 
 ```toml
 [dependencies]
@@ -114,8 +116,9 @@ cannot be cloned is sent once, without retries.
 
 **Yours to tune.** `configure(|builder| ...)` applies any `reqwest::ClientBuilder`
 setting (default headers, redirect policy, TLS) to every underlying client. Features
-such as `gzip`, `brotli`, `cookies` or `json` are enabled on your own `reqwest`
-dependency, as usual.
+such as `gzip`, `brotli` or `cookies` are enabled on your own `reqwest` dependency, as
+usual. `query`, `form`, `json` and `multipart` are this crate's own features, off by
+default, each enabling the matching `RequestBuilder` method.
 
 `RotatingClient` is `Clone` (cheap; clones share pools, cooldowns and the rate
 limiter), `Send + Sync`, `#![forbid(unsafe_code)]`, TLS via `rustls` by default —

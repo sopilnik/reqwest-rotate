@@ -18,9 +18,11 @@ use reqwest_rotate::{Error, ProxyList, RotatingClient, RotatingClientBuilder};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(feature = "json")]
 use wiremock::matchers::body_json_string;
-use wiremock::matchers::{
-    basic_auth, bearer_token, body_string, header, method, path, query_param,
-};
+#[cfg(feature = "form")]
+use wiremock::matchers::body_string;
+#[cfg(feature = "query")]
+use wiremock::matchers::query_param;
+use wiremock::matchers::{basic_auth, bearer_token, header, method, path};
 #[cfg(feature = "multipart")]
 use wiremock::matchers::{body_string_contains, header_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1192,19 +1194,13 @@ async fn request_builder_basic_and_bearer_auth_reach_the_server() {
     assert_eq!(bearer.status(), 200);
 }
 
+#[cfg(feature = "query")]
 #[tokio::test]
-async fn request_builder_query_and_form_reach_the_server() {
+async fn request_builder_query_reaches_the_server() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/search"))
         .and(query_param("q", "rust"))
-        .respond_with(ResponseTemplate::new(200))
-        .expect(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/submit"))
-        .and(body_string("name=alice"))
         .respond_with(ResponseTemplate::new(200))
         .expect(1)
         .mount(&server)
@@ -1217,6 +1213,23 @@ async fn request_builder_query_and_form_reach_the_server() {
         .send()
         .await
         .unwrap();
+
+    assert_eq!(search.status(), 200);
+}
+
+#[cfg(feature = "form")]
+#[tokio::test]
+async fn request_builder_form_reaches_the_server() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/submit"))
+        .and(body_string("name=alice"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = RotatingClient::builder().build().unwrap();
     let submit = client
         .request(reqwest::Method::POST, format!("{}/submit", server.uri()))
         .form(&[("name", "alice")])
@@ -1224,7 +1237,6 @@ async fn request_builder_query_and_form_reach_the_server() {
         .await
         .unwrap();
 
-    assert_eq!(search.status(), 200);
     assert_eq!(submit.status(), 200);
 }
 

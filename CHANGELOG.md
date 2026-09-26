@@ -18,8 +18,39 @@ and this project uses [Semantic Versioning](https://semver.org/).
   now retried for every method, including `POST`, like
   `REFUSED_STREAM`. A `GOAWAY` naming an actual error code is
   unchanged: idempotent methods only.
-- The minimum supported `reqwest` is now 0.12.23, the first
-  release with `ClientBuilder::retry`.
+- `reqwest` is now 0.13, up from 0.12. This crate's API takes and
+  returns `reqwest` types (`reqwest::Response`, `reqwest::Request`,
+  `reqwest::RequestBuilder`, the `reqwest::ClientBuilder` that
+  `configure` hands you, and `reqwest::Error` inside `Error`), so a
+  project that also depends on `reqwest` directly needs the same
+  version in both places.
+- The `rustls-tls` feature is renamed `rustls`, matching reqwest's
+  own name for it. `rustls-tls` stays as an alias, so an existing
+  `Cargo.toml` naming it still builds.
+- `RequestBuilder::query` and `RequestBuilder::form` move behind
+  their own `query` and `form` features, the same way `json` and
+  `multipart` already do.
+- reqwest 0.13's `rustls` feature builds on `aws-lc-rs` instead of
+  `ring`, and verifies certificates against the operating system's
+  own trust store instead of the bundled `webpki-roots` list. On
+  Linux that is the system CA bundle: without one (no
+  `ca-certificates` package, no `SSL_CERT_FILE`),
+  `RotatingClientBuilder::build` now returns `Error::Build`.
+- With `native-tls`, HTTPS connections now offer HTTP/2 through
+  ALPN and use it when the server agrees, as `rustls` already did:
+  reqwest 0.13 folded its `native-tls-alpn` feature into
+  `native-tls`. Before, `native-tls` stayed on HTTP/1.1.
+
+### Migrating from 0.1
+
+- Move your own `reqwest` dependency to 0.13.
+- `rustls-tls` still works; rename it to `rustls` only if you want
+  to match reqwest's own name.
+- Enable the `query` or `form` feature if you call
+  `RequestBuilder::query` or `RequestBuilder::form`.
+- On Linux, give the machine or container a CA bundle (the
+  `ca-certificates` package, or `SSL_CERT_FILE` pointing at one):
+  the default `rustls` build no longer carries its own.
 
 ## [0.1.1] - 2026-09-16
 
