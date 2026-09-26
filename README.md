@@ -10,7 +10,7 @@
 
 A small `reqwest` client wrapper for scrapers and API clients that need proxy
 rotation, per-host rate limiting, and retry-with-backoff, without pulling in
-a middleware framework: one `RotatingClient`, one builder, boring behavior.
+a middleware framework: one `RotatingClient`, one builder, boring behaviour.
 
 ## Installation
 
@@ -97,18 +97,18 @@ a query parameter stays out of the log too. A header you add yourself through
 **Per-host rate limiting.** A minimum interval between requests to the same host
 name; port and scheme are not part of the key, so `http://` and `https://` traffic
 to one host shares a single schedule. Enforced with `tokio::time`. Concurrent
-callers to one host are serialized, not dropped.
+callers to one host are serialised, not dropped.
 
 **Retry with backoff.** `408`, `429` and `503` are retried for every request. Other
 `5xx` (except `501`/`505`), request timeouts and connections dropped before a response
 arrived (the classic keep-alive race of long-running scrapers) are retried for
 idempotent methods only (`GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE`, `TRACE`), so a
-`POST` is never duplicated. The one exception is a `407` from a proxy, which never
-forwarded the request. Connect failures (including connect timeouts), requests
-cancelled before dispatch, HTTP/2 `REFUSED_STREAM`, and a graceful HTTP/2
-`GOAWAY(NO_ERROR)` that left the request unprocessed prove the server never acted on
-the request and are retried for everything; a `GOAWAY` naming an actual error code
-is idempotent-only, like a stream reset.
+`POST` is never duplicated. Failures that prove the server never acted on the request
+are retried for everything: a `407` from a proxy (the proxy never forwarded it);
+connect failures, including connect timeouts; requests cancelled before dispatch;
+HTTP/2 `REFUSED_STREAM`; and a graceful HTTP/2 `GOAWAY(NO_ERROR)` that left the
+request unprocessed. A `GOAWAY` naming an actual error code is idempotent-only, like
+a stream reset.
 
 reqwest's own retry layer is switched off, so `retries()` counts attempts exactly,
 unless `configure(..)` sets a policy of its own. With `switch_proxy_on_429(true)` and
@@ -141,7 +141,7 @@ against a local server.
 **Not just GET.** `request()` returns a builder wrapping `reqwest::RequestBuilder`;
 calling `.send()` on it routes the request through the same rate limiting, rotation
 and retries as `get()`. (Calling `.send()` on a plain `reqwest::RequestBuilder` sends
-directly, with none of that — `request()` hands back a wrapper precisely so that
+directly, with none of that: `request()` hands back a wrapper precisely so that
 mistake doesn't compile silently into a scraper that leaks its real IP.) `send()` on
 the client itself still takes a plain `reqwest::RequestBuilder`, for one built some
 other way. `execute()` takes a pre-built `reqwest::Request`. A streaming body that
@@ -154,7 +154,7 @@ usual. `query`, `form`, `json` and `multipart` are this crate's own features, of
 default, each enabling the matching `RequestBuilder` method.
 
 `RotatingClient` is `Clone` (cheap; clones share pools, cooldowns and the rate
-limiter), `Send + Sync`, `#![forbid(unsafe_code)]`, TLS via `rustls` by default —
+limiter), `Send + Sync`, `#![forbid(unsafe_code)]`, TLS via `rustls` by default;
 disable default features and enable `native-tls` instead to use your platform's own
 TLS. Clones of a `RotatingClientBuilder` share a pool given through `proxy_list`, so
 every client built from them shares its cooldowns; see the builder for the details.

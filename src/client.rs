@@ -160,7 +160,7 @@ impl RotatingClient {
     /// [`get`](Self::get) does. Call [`build`](RequestBuilder::build)
     /// instead if you only want the [`Request`], or
     /// [`into_inner`](RequestBuilder::into_inner) to get the plain
-    /// `reqwest::RequestBuilder` back — its own `.send()` bypasses
+    /// `reqwest::RequestBuilder` back; its own `.send()` bypasses
     /// rotation, rate limiting and retries, sending directly with no proxy.
     pub fn request(&self, method: reqwest::Method, url: impl reqwest::IntoUrl) -> RequestBuilder {
         RequestBuilder {
@@ -219,13 +219,13 @@ impl RotatingClient {
     /// body. The request is cloned on every attempt except the last, where
     /// the original is sent directly. If a clone is needed but fails, the
     /// original is sent once and that attempt is treated as the last one:
-    /// the body can't be replayed, but it can at least be sent.
+    /// the body cannot be replayed, but it can at least be sent.
     async fn send_with_retry(&self, request: Request) -> Result<Response, Error> {
         let inner = &*self.inner;
         let idempotent = is_idempotent(request.method());
         // The last attempt moves the request out; every earlier attempt only
-        // borrows it to clone. The loop always returns once it's been taken,
-        // but the borrow checker can't see that, hence the Option and the
+        // borrows it to clone. The loop always returns once it has been taken,
+        // but the borrow checker cannot see that, hence the Option and the
         // expects.
         let mut pending = Some(request);
         let mut attempt: u32 = 0;
@@ -382,7 +382,7 @@ impl RotatingClient {
 /// This wraps [`reqwest::RequestBuilder`] instead of returning it directly:
 /// the reqwest idiom of calling `.send()` on a plain `RequestBuilder` would
 /// send the request from the direct client, with no proxy rotation, rate
-/// limiting or retries — silently doing the one thing a [`RotatingClient`]
+/// limiting or retries, silently doing the one thing a [`RotatingClient`]
 /// exists to prevent. Call [`send`](Self::send) here instead; it routes
 /// through the same retry loop as [`RotatingClient::get`].
 /// [`into_inner`](Self::into_inner) is the escape hatch for the rare case
@@ -496,7 +496,7 @@ impl RequestBuilder {
     }
 
     /// Sends the request, applying rate limiting, proxy rotation, and
-    /// retries — the same path as [`RotatingClient::get`].
+    /// retries: the same path as [`RotatingClient::get`].
     ///
     /// # Errors
     ///
@@ -561,7 +561,7 @@ async fn drain(mut response: Response) {
 }
 
 /// Charges one chunk against the drain budget; an empty chunk still costs
-/// one unit, so a peer sending nothing but empty frames can't loop forever.
+/// one unit, so a peer sending nothing but empty frames cannot loop forever.
 fn spend(budget: usize, chunk_len: usize) -> usize {
     budget.saturating_sub(chunk_len.max(1))
 }
@@ -831,7 +831,7 @@ impl RotatingClientBuilder {
     /// went through (redacted the same way as `tracing` output) and the
     /// delay before the next attempt. Not called for the first attempt, nor
     /// after the last failed one: the caller sees that result directly.
-    /// Meant for counters and metrics; keep it quick and don't block in it.
+    /// Meant for counters and metrics; keep it quick and do not block in it.
     /// A panic in `hook` propagates to the caller of the request.
     /// Independent of the `tracing` feature: use either, or both.
     ///

@@ -42,7 +42,7 @@ On top of that, CI runs the test suite on macOS and Windows, checks every featur
 
 ## Pull requests
 
-Say what you changed and why, and link the issue, for example `Fixes #12`. Please send unrelated formatting or refactoring as a separate pull request.
+Say what you changed and why, and link the issue, for example `Fixes #123`. Please send unrelated formatting or refactoring as a separate pull request.
 
 ## License
 

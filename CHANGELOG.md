@@ -37,16 +37,6 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- A `Retry-After` header can no longer shorten the wait below the
-  computed backoff, only lengthen it. Before, a server answering `429`
-  with `Retry-After: 0` got every remaining retry back to back with no
-  backoff at all.
-- `retries(n)` is now exact. reqwest's own retry layer is switched
-  off on every client this crate builds. Before, reqwest could
-  resend an HTTP/2 request after `REFUSED_STREAM` or
-  `GOAWAY(NO_ERROR)` up to twice under each attempt, and replay a
-  `POST` with a clonable body by its own rules instead of this
-  crate's.
 - An HTTP/2 `GOAWAY(NO_ERROR)` that left a request unprocessed is
   now retried for every method, including `POST`, like
   `REFUSED_STREAM`. A `GOAWAY` naming an actual error code is
@@ -77,6 +67,8 @@ and this project uses [Semantic Versioning](https://semver.org/).
   `README.md` instead of a separate copy in `src/lib.rs`, so there
   is one copy of it to keep current instead of two that had already
   drifted apart.
+- docs.rs now marks `RequestBuilder::query`, `form`, `json` and
+  `multipart` with the feature each one needs.
 - Minimum dependency versions raised to what the rest of the
   dependency graph already requires, so `Cargo.toml` no longer
   allows releases that cannot be resolved together: `http` 1.1,
@@ -85,6 +77,19 @@ and this project uses [Semantic Versioning](https://semver.org/).
   its traits with current `serde_json`), `thiserror` 2.0.3 and
   `tokio` 1.28.1 (reqwest's optional HTTP/3 dependency `quinn`,
   which Cargo resolves even though this crate never enables it).
+
+### Fixed
+
+- A `Retry-After` header can no longer shorten the wait below the
+  computed backoff, only lengthen it. Before, a server answering `429`
+  with `Retry-After: 0` got every remaining retry back to back with no
+  backoff at all.
+- `retries(n)` is now exact. reqwest's own retry layer is switched
+  off on every client this crate builds. Before, reqwest could
+  resend an HTTP/2 request after `REFUSED_STREAM` or
+  `GOAWAY(NO_ERROR)` up to twice under each attempt, and replay a
+  `POST` with a clonable body by its own rules instead of this
+  crate's.
 
 ### Migrating from 0.1
 
@@ -96,6 +101,12 @@ and this project uses [Semantic Versioning](https://semver.org/).
 - On Linux, give the machine or container a CA bundle (the
   `ca-certificates` package, or `SSL_CERT_FILE` pointing at one):
   the default `rustls` build no longer carries its own.
+- If you counted on reqwest replaying an HTTP/2 `REFUSED_STREAM` or
+  `GOAWAY(NO_ERROR)` underneath `retries(n)`, those attempts are now
+  this crate's own: raise `retries` if a low count starts running out.
+- A `Retry-After` shorter than the computed backoff, `0` included, no
+  longer cuts the wait short. Nothing to change unless a test of yours
+  timed a `Retry-After: 0` retry.
 
 ## [0.1.1] - 2026-09-16
 

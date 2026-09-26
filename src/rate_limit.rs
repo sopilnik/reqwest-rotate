@@ -9,7 +9,7 @@ use tokio::time::Instant;
 
 /// Above this many distinct hosts, [`RateLimiter::wait`] prunes stale
 /// entries, so a long-running process hitting an unbounded set of hosts
-/// doesn't grow this map forever.
+/// does not grow this map forever.
 const PRUNE_ABOVE_HOSTS: usize = 1024;
 
 /// Prunes are spaced at least this many `min_interval`s apart, capped at
@@ -23,7 +23,7 @@ const PRUNE_SPACING_MULTIPLE: u32 = 10;
 /// dead slots pile up before a scan.
 const MAX_PRUNE_SPACING: Duration = Duration::from_secs(1);
 
-/// Serializes requests to the same host so that no two requests to it start
+/// Serialises requests to the same host so that no two requests to it start
 /// less than `min_interval` apart. `None` (or a zero interval) disables
 /// rate limiting entirely.
 ///
@@ -366,7 +366,7 @@ mod tests {
         assert!(first.is_err());
         assert_eq!(Instant::now() - t0, Duration::from_millis(1000));
 
-        // The surviving (second) reservation must still be honored in full,
+        // The surviving (second) reservation must still be honoured in full,
         // not rolled back by the cancelled call that queued ahead of it.
         let start = Instant::now();
         limiter.wait(host).await;

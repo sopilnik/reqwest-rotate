@@ -42,7 +42,7 @@ fn jitter_fraction() -> f64 {
 /// `attempt` is zero-based (0 = delay before the *first* retry, i.e. after
 /// the initial request failed).
 pub(crate) fn backoff_delay(attempt: u32, base: Duration, max: Duration) -> Duration {
-    // Cap the shift so it can't overflow for a large attempt count; by the
+    // Cap the shift so it cannot overflow for a large attempt count; by the
     // time the exponent is this big the delay is clamped to `max` anyway,
     // so the exact multiplier no longer matters.
     let multiplier = 1u32.checked_shl(attempt).unwrap_or(u32::MAX);
@@ -101,7 +101,7 @@ pub(crate) fn is_transport_error(err: &reqwest::Error) -> bool {
         return false;
     }
     sources(err).any(|inner| {
-        // hyper wraps every HTTP/2 stream and connection error it doesn't
+        // hyper wraps every HTTP/2 stream and connection error it does not
         // treat as IO as its own non-user, non-parse error, so an h2 error
         // never needs a downcast of its own here - the hyper branch has
         // already matched by the time the chain reaches it.
@@ -137,7 +137,7 @@ pub(crate) fn is_never_sent_error(err: &reqwest::Error) -> bool {
 }
 
 /// Decides whether a transport error is worth another attempt: always when
-/// the request provably never reached the server, otherwise only for
+/// the server provably never acted on the request, otherwise only for
 /// `idempotent` requests, where a duplicate is harmless. A total request
 /// timeout on a `POST` is therefore *not* retried: the server may be in
 /// the middle of processing it.
@@ -149,7 +149,7 @@ pub(crate) fn should_retry_error(err: &reqwest::Error, idempotent: bool) -> bool
 /// [`on_retry`](crate::RotatingClientBuilder::on_retry) before the client
 /// waits and tries again.
 ///
-/// More fields may be added later, so this can't be constructed or matched
+/// More fields may be added later, so this cannot be constructed or matched
 /// exhaustively outside the crate.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -171,7 +171,7 @@ pub struct RetryEvent {
 
 /// Why an attempt is being retried.
 ///
-/// More variants may be added later, so this can't be matched exhaustively
+/// More variants may be added later, so this cannot be matched exhaustively
 /// outside the crate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
@@ -186,7 +186,7 @@ pub enum RetryReason {
     /// A connect failure: to the server on a direct request, to the proxy,
     /// or through the proxy's `CONNECT` tunnel.
     Connect,
-    /// A failure that proves the request never reached the server: a
+    /// A failure that proves the server never acted on the request: a
     /// cancelled dispatch, an HTTP/2 `REFUSED_STREAM`, or an unprocessed
     /// graceful `GOAWAY`.
     NeverSent,

@@ -344,7 +344,7 @@ fn normalize_proxy_url(raw: &str) -> Result<String, Error> {
     // An explicit `scheme://` is taken at face value (and its scheme
     // checked below). Anything else (`host:port`, `1.2.3.4:8080`,
     // `user:pass@host:port`) is treated as an HTTP proxy. Trying to parse
-    // those directly would misread `host` as a scheme, so don't.
+    // those directly would misread `host` as a scheme, so do not.
     let has_scheme = raw.contains("://");
     let with_scheme = if has_scheme {
         raw.to_string()
@@ -682,7 +682,7 @@ mod tests {
         assert!(message.contains("***@"), "{message}");
 
         // A schemeless input must not have the `http://` this function
-        // synthesizes internally leak into the message: the caller never
+        // synthesises internally leak into the message: the caller never
         // typed it, so the message should open with their own spelling.
         let schemeless = ProxyList::new(["not a valid proxy url"])
             .unwrap_err()

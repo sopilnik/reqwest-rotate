@@ -4,7 +4,7 @@
 
 Only the latest version gets security fixes. I don't backport fixes to older versions.
 
-CI checks the dependencies against the RustSec advisory database on every push to `main`, on every pull request and once a week. If an advisory means this crate has to require a newer version of a dependency, I release that as a patch version.
+CI checks the dependencies against the RustSec advisory database on every push to `main` and once a week; pull requests skip that check, so a new advisory never blocks an unrelated change. If an advisory means this crate has to require a newer version of a dependency, I release that as a patch version.
 
 ## Reporting a vulnerability
 
