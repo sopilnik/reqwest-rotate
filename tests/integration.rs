@@ -488,6 +488,59 @@ fn client_is_clone_send_and_sync() {
     assert_traits::<RotatingClient>();
 }
 
+#[test]
+fn builder_is_clone_send_and_sync() {
+    fn assert_traits<T: Clone + Send + Sync + 'static>() {}
+    assert_traits::<RotatingClientBuilder>();
+}
+
+#[test]
+fn builder_clones_share_a_given_proxy_list() {
+    let (first, second) = ("http://proxy-a.example:8080", "http://proxy-b.example:8080");
+
+    let pool = ProxyList::new([first, second]).unwrap();
+    let builder = quick().proxy_list(pool);
+
+    let one = builder.clone().build().unwrap();
+    let other = builder.build().unwrap();
+
+    assert!(one.proxies().mark_bad(first, Duration::from_secs(60)));
+    assert!(other.proxies().in_cooldown(first));
+}
+
+#[test]
+fn builder_clones_with_url_proxies_get_separate_pools() {
+    let proxy = "http://proxy-a.example:8080";
+
+    let builder = quick().proxies([proxy]);
+    let one = builder.clone().build().unwrap();
+    let other = builder.build().unwrap();
+
+    assert!(one.proxies().mark_bad(proxy, Duration::from_secs(60)));
+    assert!(!other.proxies().in_cooldown(proxy));
+}
+
+#[tokio::test]
+async fn builder_clone_keeps_the_configure_hook() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(header("x-configured", "yes"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let builder = quick().configure(|builder| {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-configured", HeaderValue::from_static("yes"));
+        builder.default_headers(headers)
+    });
+    let clone = builder.clone();
+
+    let response = clone.build().unwrap().get(server.uri()).await.unwrap();
+    assert_eq!(response.status(), 200);
+}
+
 #[tokio::test]
 async fn works_without_any_proxies_configured() {
     let server = MockServer::start().await;

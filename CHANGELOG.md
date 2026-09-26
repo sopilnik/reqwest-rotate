@@ -13,6 +13,11 @@ and this project uses [Semantic Versioning](https://semver.org/).
 - `ProxyList::iter`. Yields the configured proxies as an iterator
   instead of a slice, so code that reads the list no longer depends
   on how it is stored. `as_slice` stays available until 1.0.
+- `RotatingClientBuilder` is now `Clone`. A pool given through
+  `proxy_list` and a hook given through `configure` are shared
+  between clones, cooldowns included; a pool given as plain URLs
+  through `proxies` is built fresh by each `build()` and is not
+  shared.
 
 ### Changed
 

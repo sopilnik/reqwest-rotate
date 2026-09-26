@@ -59,7 +59,7 @@ struct Inner {
     direct_client: reqwest::Client,
     /// One pre-built client per proxy, parallel to `proxies.iter()`.
     proxy_clients: Vec<reqwest::Client>,
-    proxies: ProxyList,
+    proxies: Arc<ProxyList>,
     rate_limiter: RateLimiter,
     retries: u32,
     backoff_base: Duration,
@@ -166,9 +166,9 @@ impl RotatingClient {
     /// cooldown early with `mark_good()` once your own check sees a proxy
     /// answer.
     ///
-    /// Calling `pick()` on the returned list advances this client's
-    /// rotation and clears an expired cooldown; `iter()`, `len()` and
-    /// `in_cooldown()` are the read-only accessors.
+    /// Calling `pick()` on the returned list advances the rotation of every
+    /// client that uses this list and clears an expired cooldown; `iter()`,
+    /// `len()` and `in_cooldown()` are the read-only accessors.
     #[must_use]
     pub fn proxies(&self) -> &ProxyList {
         &self.inner.proxies
@@ -495,10 +495,18 @@ fn spend(budget: usize, chunk_len: usize) -> usize {
 
 /// Builder for [`RotatingClient`]. Construct one with
 /// [`RotatingClient::builder`].
-#[derive(Default)]
+///
+/// Clones copy the settings and share a pool given through
+/// [`proxy_list`](Self::proxy_list) and the [`configure`](Self::configure)
+/// hook: every client built from any clone rotates the same `ProxyList`,
+/// cooldowns and rotation position included. A pool given as URLs through
+/// [`proxies`](Self::proxies) is built fresh by each [`build`](Self::build)
+/// and not shared, and each `build()` makes its own rate limiter and
+/// underlying `reqwest` clients.
+#[derive(Clone, Default)]
 pub struct RotatingClientBuilder {
     proxies: Vec<String>,
-    proxy_list: Option<ProxyList>,
+    proxy_list: Option<Arc<ProxyList>>,
     rate_limit: Option<Duration>,
     retries: Option<u32>,
     backoff_base: Option<Duration>,
@@ -508,7 +516,7 @@ pub struct RotatingClientBuilder {
     user_agent: Option<String>,
     timeout: Option<Duration>,
     connect_timeout: Option<Duration>,
-    configure: Option<Box<ConfigureFn>>,
+    configure: Option<Arc<ConfigureFn>>,
 }
 
 impl fmt::Debug for RotatingClientBuilder {
@@ -568,10 +576,11 @@ impl RotatingClientBuilder {
 
     /// Sets the proxy pool directly from a pre-built [`ProxyList`], e.g.
     /// one you validated up front or already put some proxies on cooldown
-    /// in. Overrides [`proxies`](Self::proxies) if both are set.
+    /// in. Overrides [`proxies`](Self::proxies) if both are set. A clone
+    /// of this builder shares the same `ProxyList`, cooldowns included.
     #[must_use]
     pub fn proxy_list(mut self, proxy_list: ProxyList) -> Self {
-        self.proxy_list = Some(proxy_list);
+        self.proxy_list = Some(Arc::new(proxy_list));
         self
     }
 
@@ -713,7 +722,7 @@ impl RotatingClientBuilder {
     where
         F: Fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder + Send + Sync + 'static,
     {
-        self.configure = Some(Box::new(configure));
+        self.configure = Some(Arc::new(configure));
         self
     }
 
@@ -728,7 +737,7 @@ impl RotatingClientBuilder {
     pub fn build(self) -> Result<RotatingClient, Error> {
         let proxies = match self.proxy_list {
             Some(list) => list,
-            None => ProxyList::new(&self.proxies)?,
+            None => Arc::new(ProxyList::new(&self.proxies)?),
         };
         let timeout = self.timeout.unwrap_or(DEFAULT_TIMEOUT);
         let connect_timeout = self.connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT);
@@ -834,6 +843,23 @@ mod tests {
         assert!(!debug.contains("pass"), "{debug}");
         assert!(!debug.contains("ss@proxy"), "{debug}");
         assert!(debug.contains("***@proxy.example:3128"), "{debug}");
+    }
+
+    #[test]
+    fn builder_debug_prints_the_pool_and_a_placeholder_for_the_hook() {
+        let debug = format!(
+            "{:?}",
+            RotatingClient::builder()
+                .proxy_list(ProxyList::new(["proxy.example:3128"]).unwrap())
+                .configure(|builder| builder)
+        );
+        assert!(
+            debug.contains(
+                r#"proxy_list: Some(ProxyList { proxies: ["http://proxy.example:3128/"], in_cooldown: [] })"#
+            ),
+            "{debug}"
+        );
+        assert!(debug.contains(r#"configure: Some("<fn>")"#), "{debug}");
     }
 
     /// `builder_debug_hides_credentials` above only covers the *builder*.

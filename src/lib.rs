@@ -107,6 +107,11 @@
 //!
 //! `RotatingClient` is cheap to clone: clones share the connection pools,
 //! the proxy cooldown state, and the rate limiter.
+//!
+//! Clones of a [`RotatingClientBuilder`] share a pool given through
+//! [`proxy_list`](RotatingClientBuilder::proxy_list), so every client
+//! built from them shares its cooldowns; see the builder for the
+//! details.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
