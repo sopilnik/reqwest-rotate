@@ -173,7 +173,7 @@ pub struct RetryEvent {
 ///
 /// More variants may be added later, so this can't be matched exhaustively
 /// outside the crate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum RetryReason {
     /// A retryable answer from the origin: `408`, `429`, `503`, or, for

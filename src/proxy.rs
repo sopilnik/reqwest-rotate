@@ -254,6 +254,7 @@ impl ProxyList {
 
     /// Returns `true` if `proxy` (in either form, see
     /// [`mark_bad`](Self::mark_bad)) is currently in cooldown.
+    #[must_use]
     pub fn in_cooldown(&self, proxy: &str) -> bool {
         let Some(idx) = self.position(proxy) else {
             return false;

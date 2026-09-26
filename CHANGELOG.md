@@ -28,7 +28,8 @@ and this project uses [Semantic Versioning](https://semver.org/).
   the same way as `tracing` output) and the coming delay, for counters
   and metrics that do not want a tracing subscriber. `RetryEvent` and
   `RetryReason` are `#[non_exhaustive]`, so more fields and variants
-  can be added later without a breaking change.
+  can be added later without a breaking change. `RetryReason` also
+  implements `Hash` and `Ord`, so it can key a map.
 - Three runnable examples under `examples/`: `get` fetches one URL
   with retries and backoff, `proxy_pool` rotates across proxies read
   from `PROXIES` and reports their cooldown state, and `retry_metrics`
