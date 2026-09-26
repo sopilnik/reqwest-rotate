@@ -100,6 +100,24 @@ jobs:
         # features do not reach the library build anyway.
         run: cargo hack check --feature-powerset --depth 2 --group-features rustls,rustls-tls --mutually-exclusive-features rustls,native-tls --locked
 
+  minimal-versions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # The resolver flag this needs is nightly-only.
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        with:
+          tool: cargo-hack,cargo-minimal-versions
+      - name: minimal versions
+        # Direct dependencies at the lowest version each requirement
+        # allows; transitive ones stay current, since other crates' floors
+        # are not this crate's to fix.
+        run: cargo minimal-versions check --direct --all-features
+
   deny:
     runs-on: ubuntu-latest
     steps:

@@ -76,6 +76,14 @@ and this project uses [Semantic Versioning](https://semver.org/).
   `README.md` instead of a separate copy in `src/lib.rs`, so there
   is one copy of it to keep current instead of two that had already
   drifted apart.
+- Minimum dependency versions raised to what the rest of the
+  dependency graph already requires, so `Cargo.toml` no longer
+  allows releases that cannot be resolved together: `http` 1.1,
+  `hyper` 1.6.0, `h2` 0.4.2 and `tracing` 0.1.35 (reqwest 0.13 and
+  its HTTP stack), `serde` 1.0.220 (the first release that shares
+  its traits with current `serde_json`), `thiserror` 2.0.3 and
+  `tokio` 1.28.1 (reqwest's optional HTTP/3 dependency `quinn`,
+  which Cargo resolves even though this crate never enables it).
 
 ### Migrating from 0.1
 
