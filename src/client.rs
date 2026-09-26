@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use reqwest::{Request, Response};
+use reqwest::{Request, Response, StatusCode};
 
 use crate::error::Error;
 use crate::proxy::ProxyList;
@@ -66,6 +66,7 @@ struct Inner {
     backoff_max: Duration,
     max_retry_after: Duration,
     proxy_cooldown: Duration,
+    switch_proxy_on_429: bool,
 }
 
 impl RotatingClient {
@@ -256,6 +257,15 @@ impl RotatingClient {
 
                     let delay = if let Some(idx) = blamed_proxy {
                         switch_delay(inner, attempt, idx)
+                    } else if inner.switch_proxy_on_429
+                        && status == StatusCode::TOO_MANY_REQUESTS
+                        && proxy_idx.is_some_and(|idx| inner.proxies.any_healthy_except(idx))
+                    {
+                        trace_log!(
+                            "proxy {} answered 429: switching to another proxy without waiting",
+                            inner.proxies.redacted(proxy_idx.expect("checked above"))
+                        );
+                        Duration::ZERO
                     } else {
                         let asked = retry_after(response.headers());
                         match asked {
@@ -516,6 +526,7 @@ pub struct RotatingClientBuilder {
     backoff_max: Option<Duration>,
     max_retry_after: Option<Duration>,
     proxy_cooldown: Option<Duration>,
+    switch_proxy_on_429: bool,
     user_agent: Option<String>,
     timeout: Option<Duration>,
     connect_timeout: Option<Duration>,
@@ -540,6 +551,7 @@ impl fmt::Debug for RotatingClientBuilder {
             .field("backoff_max", &self.backoff_max)
             .field("max_retry_after", &self.max_retry_after)
             .field("proxy_cooldown", &self.proxy_cooldown)
+            .field("switch_proxy_on_429", &self.switch_proxy_on_429)
             .field("user_agent", &self.user_agent)
             .field("timeout", &self.timeout)
             .field("connect_timeout", &self.connect_timeout)
@@ -637,7 +649,10 @@ impl RotatingClientBuilder {
     /// backoff delay when it asks for longer; a shorter one, `0` included,
     /// leaves the backoff as it is. If the server asks for more than this,
     /// the response is returned instead of retrying early against its
-    /// wishes. Check the status and the header yourself in that case.
+    /// wishes. Check the status and the header yourself in that case. A
+    /// `429` that [`switch_proxy_on_429`](Self::switch_proxy_on_429)
+    /// retries through another proxy ignores its `Retry-After`, so this
+    /// limit does not apply to it.
     #[must_use]
     pub const fn max_retry_after(mut self, max: Duration) -> Self {
         self.max_retry_after = Some(max);
@@ -651,6 +666,20 @@ impl RotatingClientBuilder {
     #[must_use]
     pub const fn proxy_cooldown(mut self, cooldown: Duration) -> Self {
         self.proxy_cooldown = Some(cooldown);
+        self
+    }
+
+    /// When a `429` comes back through a proxy, retry it right away
+    /// through whichever proxy rotation picks next instead of waiting: a
+    /// per-IP rate limit does not bind another IP, so the `429`'s
+    /// `Retry-After` is ignored and the limited proxy is not put in
+    /// cooldown. Falls back to the usual `Retry-After`/backoff path when
+    /// no other proxy is out of cooldown, or when the `429` came through
+    /// the direct client. Other statuses, `503` included, are not
+    /// affected. Default: off.
+    #[must_use]
+    pub const fn switch_proxy_on_429(mut self, switch: bool) -> Self {
+        self.switch_proxy_on_429 = switch;
         self
     }
 
@@ -816,6 +845,7 @@ impl RotatingClientBuilder {
                     .unwrap_or(DEFAULT_MAX_RETRY_AFTER)
                     .min(crate::MAX_DURATION),
                 proxy_cooldown: self.proxy_cooldown.unwrap_or(DEFAULT_PROXY_COOLDOWN),
+                switch_proxy_on_429: self.switch_proxy_on_429,
             }),
         })
     }

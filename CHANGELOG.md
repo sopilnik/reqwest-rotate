@@ -18,6 +18,11 @@ and this project uses [Semantic Versioning](https://semver.org/).
   between clones, cooldowns included; a pool given as plain URLs
   through `proxies` is built fresh by each `build()` and is not
   shared.
+- `RotatingClientBuilder::switch_proxy_on_429`. When on, a `429` that
+  came through a proxy is retried at once through the next proxy in
+  rotation instead of waiting: a per-IP rate limit does not bind
+  another IP. The `429`'s `Retry-After` is ignored and the limited
+  proxy is not put in cooldown. Off by default.
 
 ### Changed
 

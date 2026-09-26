@@ -925,6 +925,166 @@ async fn proxy_407_cools_down_and_rotates() {
 }
 
 #[tokio::test]
+async fn switch_proxy_on_429_goes_to_the_next_proxy_at_once() {
+    let (limited, limited_seen) = raw_server(
+        0,
+        b"HTTP/1.1 429 Too Many Requests\r\nretry-after: 30\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+    )
+    .await;
+    let (other, other_seen) = raw_server(
+        0,
+        b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\nconnection: close\r\n\r\nvia-b",
+    )
+    .await;
+
+    let client = RotatingClient::builder()
+        .proxies([limited.as_str(), other.as_str()])
+        .retries(1)
+        .switch_proxy_on_429(true)
+        // A large backoff: switching proxies must not wait for it, and the
+        // Retry-After above is far larger still.
+        .backoff(Duration::from_secs(60), Duration::from_secs(60))
+        .max_retry_after(Duration::from_secs(60))
+        .build()
+        .unwrap();
+
+    let response = tokio::time::timeout(
+        Duration::from_secs(2),
+        client.get("http://example.invalid/page"),
+    )
+    .await
+    .expect("switching proxies must not wait")
+    .unwrap();
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.text().await.unwrap(), "via-b");
+    assert_eq!(limited_seen.load(Ordering::SeqCst), 1);
+    assert_eq!(other_seen.load(Ordering::SeqCst), 1);
+    assert!(!client.proxies().in_cooldown(&limited));
+}
+
+#[tokio::test]
+async fn a_429_through_a_proxy_waits_by_default() {
+    let (limited, limited_seen) = raw_server(
+        0,
+        b"HTTP/1.1 429 Too Many Requests\r\nretry-after: 30\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+    )
+    .await;
+    let (other, other_seen) = raw_server(
+        0,
+        b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\nconnection: close\r\n\r\nvia-b",
+    )
+    .await;
+
+    let client = RotatingClient::builder()
+        .proxies([limited.as_str(), other.as_str()])
+        .retries(1)
+        .backoff(Duration::from_secs(5), Duration::from_secs(5))
+        .max_retry_after(Duration::from_secs(1))
+        .build()
+        .unwrap();
+
+    let start = tokio::time::Instant::now();
+    let response = client.get("http://example.invalid/page").await.unwrap();
+
+    // The 30 s Retry-After is above the 1 s cap, so the 429 comes back
+    // instead of an early retry against the server's wishes.
+    assert_eq!(response.status(), 429);
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        start.elapsed()
+    );
+    assert_eq!(limited_seen.load(Ordering::SeqCst), 1);
+    assert_eq!(other_seen.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn switch_proxy_on_429_needs_another_healthy_proxy() {
+    let (limited, limited_seen) = raw_server(
+        0,
+        b"HTTP/1.1 429 Too Many Requests\r\nretry-after: 30\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+    )
+    .await;
+
+    let client = RotatingClient::builder()
+        .proxies([limited.as_str()])
+        .retries(1)
+        .switch_proxy_on_429(true)
+        .backoff(Duration::from_secs(5), Duration::from_secs(5))
+        .max_retry_after(Duration::from_secs(1))
+        .build()
+        .unwrap();
+
+    let response = client.get("http://example.invalid/page").await.unwrap();
+
+    // No other proxy to switch to, so the usual Retry-After/backoff path
+    // applies, and the 30 s ask above the 1 s cap returns the response.
+    assert_eq!(response.status(), 429);
+    assert_eq!(limited_seen.load(Ordering::SeqCst), 1);
+    assert!(!client.proxies().in_cooldown(&limited));
+}
+
+#[tokio::test]
+async fn switch_proxy_on_429_waits_when_the_other_proxy_is_cooling_down() {
+    let (limited, limited_seen) = raw_server(
+        0,
+        b"HTTP/1.1 429 Too Many Requests\r\nretry-after: 30\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+    )
+    .await;
+    let (other, other_seen) = raw_server(
+        0,
+        b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\nconnection: close\r\n\r\nvia-b",
+    )
+    .await;
+
+    let client = RotatingClient::builder()
+        .proxies([limited.as_str(), other.as_str()])
+        .retries(1)
+        .switch_proxy_on_429(true)
+        .backoff(Duration::from_secs(5), Duration::from_secs(5))
+        .max_retry_after(Duration::from_secs(1))
+        .build()
+        .unwrap();
+    assert!(client.proxies().mark_bad(&other, Duration::from_secs(60)));
+
+    let response = client.get("http://example.invalid/page").await.unwrap();
+
+    // The only other proxy is cooling down, so the usual path applies and
+    // the 30 s ask above the 1 s cap returns the 429.
+    assert_eq!(response.status(), 429);
+    assert_eq!(limited_seen.load(Ordering::SeqCst), 1);
+    assert_eq!(other_seen.load(Ordering::SeqCst), 0);
+    assert!(!client.proxies().in_cooldown(&limited));
+}
+
+#[tokio::test]
+async fn switch_proxy_on_429_leaves_the_direct_client_alone() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/limited"))
+        .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "30"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // No proxies, so nothing to switch to: the 30 s ask above the 1 s cap
+    // returns the 429 exactly as it would with the option off.
+    let client = quick()
+        .retries(1)
+        .switch_proxy_on_429(true)
+        .max_retry_after(Duration::from_secs(1))
+        .build()
+        .unwrap();
+    let response = client
+        .get(format!("{}/limited", server.uri()))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 429);
+}
+
+#[tokio::test]
 async fn a_proxy_that_answers_leaves_cooldown() {
     let (first, first_seen) = raw_server(0, OK_RESPONSE).await;
     let (second, _second_seen) = raw_server(0, OK_RESPONSE).await;

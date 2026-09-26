@@ -49,6 +49,12 @@
 //!   through another one; a `Retry-After` on that `407` is deliberately
 //!   not honoured, since the wait belongs to the failed proxy, not to the
 //!   server.
+//! - A `429` that came through a proxy, when
+//!   [`switch_proxy_on_429`](RotatingClientBuilder::switch_proxy_on_429)
+//!   is on and another proxy is out of cooldown: retried at once through
+//!   the next proxy in rotation instead of waiting, since a per-IP limit
+//!   does not bind another IP. That `429`'s `Retry-After` is ignored and
+//!   the limited proxy is not put in cooldown. Off by default.
 //! - Transport errors that prove the server never acted on the request:
 //!   connect failures (including connect timeouts), requests cancelled
 //!   before dispatch, HTTP/2 `REFUSED_STREAM`, and a graceful HTTP/2

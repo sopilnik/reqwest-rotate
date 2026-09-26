@@ -89,7 +89,9 @@ failures, HTTP/2 `REFUSED_STREAM`, and a graceful HTTP/2 `GOAWAY(NO_ERROR)` that
 the request unprocessed are retried for everything; a `GOAWAY` naming an actual error
 code is idempotent-only, like a stream reset. reqwest's own retry layer is
 switched off, so `retries()` counts attempts exactly, unless `configure(..)` sets a
-policy of its own.
+policy of its own. With `switch_proxy_on_429(true)`, a `429` that came through a proxy
+is retried at once through the next proxy in rotation instead of waiting on its
+`Retry-After`, since a per-IP limit does not bind another IP; off by default.
 
 Delays are full-jitter exponential with a configurable cap. A `Retry-After` header
 (seconds or HTTP-date) can lengthen the wait but never shortens it, so `Retry-After: 0`
