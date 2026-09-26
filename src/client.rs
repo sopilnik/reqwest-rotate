@@ -968,6 +968,18 @@ mod tests {
         assert_eq!(client.inner.backoff_max, crate::MAX_DURATION);
     }
 
+    /// reqwest prints a built `Client`'s per-attempt timeout in its `Debug`
+    /// output (as `reqwest::config::TotalTimeout`), so the documented
+    /// default can be checked without waiting it out. The connect timeout
+    /// leaves no such trace: a built `Client` hands it to its connector and
+    /// keeps no field for it, so only `DEFAULT_CONNECT_TIMEOUT` pins it.
+    #[test]
+    fn default_timeout_is_set_on_the_underlying_client() {
+        let client = RotatingClient::builder().build().unwrap();
+        let debug = format!("{:?}", client.inner.direct_client);
+        assert!(debug.contains("TotalTimeout: 30s"), "{debug}");
+    }
+
     #[test]
     fn builder_debug_hides_credentials() {
         let debug = format!(

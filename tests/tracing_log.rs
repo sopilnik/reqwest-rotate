@@ -40,10 +40,14 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuf {
 }
 
 /// The attempt line must carry the request URL without its query string
-/// (where callers put secrets such as an API key), and no `trace_log!`
-/// site may embed a `reqwest::Error`'s own text, which repeats the URL.
+/// (where callers put secrets such as an API key) and the proxy with its
+/// `user:password@` replaced by `***@`, and no `trace_log!` site may embed
+/// a `reqwest::Error`'s own text, which repeats the URL. Port 1 is a
+/// reserved TCP port nothing listens on, so the connect through the
+/// credentialed proxy fails at once and the attempt, cooldown and retry
+/// lines of the transport-error path fire with no server involved.
 #[tokio::test]
-async fn tracing_events_carry_no_query_string() {
+async fn tracing_events_carry_no_secrets() {
     let buf = SharedBuf::default();
     let subscriber = tracing_subscriber::fmt()
         .with_writer(buf.clone())
@@ -52,6 +56,7 @@ async fn tracing_events_carry_no_query_string() {
     let _guard = tracing::subscriber::set_default(subscriber);
 
     let client = RotatingClient::builder()
+        .proxies(["http://alice:s3cretpw@127.0.0.1:1"])
         .backoff(Duration::from_millis(5), Duration::from_millis(20))
         .retries(1)
         .build()
@@ -65,5 +70,9 @@ async fn tracing_events_carry_no_query_string() {
         output.contains("url=http://127.0.0.1:1/v1/data"),
         "{output}"
     );
+    assert!(output.contains("http://***@127.0.0.1:1/"), "{output}");
+    assert!(output.contains("cooling it down"), "{output}");
     assert!(!output.contains("SUPERSECRET"), "{output}");
+    assert!(!output.contains("s3cretpw"), "{output}");
+    assert!(!output.contains("alice"), "{output}");
 }

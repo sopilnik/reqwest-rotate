@@ -5,7 +5,7 @@
 //! Proxy rotation and cooldown arithmetic are unit-tested directly on
 //! `ProxyList` in `src/proxy.rs`.
 //!
-//! These tests run on real time, not `start_paused`: the client now has a
+//! These tests run on real time, not `start_paused`: the client has a
 //! request timeout, and tokio's auto-advancing paused clock would fire that
 //! timer the moment a task blocks on real socket I/O.
 
@@ -448,8 +448,11 @@ async fn retry_after_missing_falls_back_to_backoff() {
     assert_eq!(response.status(), 200);
 }
 
+/// End to end, a `Retry-After: 0` is retried and answered. That the wait is
+/// the backoff rather than zero cannot be timed under full jitter, so
+/// `retry_after_zero_waits_the_backoff` in `src/retry.rs` pins that part.
 #[tokio::test]
-async fn retry_after_zero_is_not_an_instant_retry() {
+async fn retry_after_zero_is_still_retried() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/zero"))
@@ -488,6 +491,35 @@ async fn rate_limit_enforces_min_interval_per_host() {
     client.get(format!("{}/a", server.uri())).await.unwrap();
     client.get(format!("{}/b", server.uri())).await.unwrap();
     let elapsed = tokio::time::Instant::now() - start;
+
+    assert!(
+        elapsed >= Duration::from_millis(300),
+        "elapsed = {elapsed:?}"
+    );
+}
+
+/// Two servers on 127.0.0.1 with different ports are one host to the
+/// limiter, so the second request waits out the first one's interval.
+#[tokio::test]
+async fn rate_limit_key_ignores_the_port() {
+    let one = MockServer::start().await;
+    let two = MockServer::start().await;
+    for server in [&one, &two] {
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(server)
+            .await;
+    }
+
+    let client = RotatingClient::builder()
+        .rate_limit(Duration::from_millis(300))
+        .build()
+        .unwrap();
+
+    let start = tokio::time::Instant::now();
+    client.get(one.uri()).await.unwrap();
+    client.get(two.uri()).await.unwrap();
+    let elapsed = start.elapsed();
 
     assert!(
         elapsed >= Duration::from_millis(300),
@@ -579,6 +611,33 @@ async fn builder_clone_keeps_the_configure_hook() {
     assert_eq!(response.status(), 200);
 }
 
+#[tokio::test]
+async fn builder_clone_keeps_the_on_retry_hook() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(503))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let (hook, events) = record_retries();
+    let builder = quick().retries(1).on_retry(hook);
+    let response = builder
+        .clone()
+        .build()
+        .unwrap()
+        .get(server.uri())
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(events.lock().unwrap().len(), 1);
+}
+
 #[test]
 fn configured_header_is_hidden_from_debug_only_when_marked_sensitive() {
     let client = quick()
@@ -665,6 +724,23 @@ async fn execute_sends_a_prebuilt_request() {
 
     let response = client.execute(request).await.unwrap();
     assert_eq!(response.text().await.unwrap(), "via execute");
+}
+
+/// `send()` takes a builder from any `reqwest::Client`; the request still
+/// goes out through this client's proxy.
+#[tokio::test]
+async fn send_takes_a_builder_from_another_reqwest_client() {
+    let (proxy, seen) = raw_server(0, OK_RESPONSE).await;
+    let client = RotatingClient::builder()
+        .proxies([proxy.as_str()])
+        .build()
+        .unwrap();
+
+    let foreign = reqwest::Client::new().get("http://example.invalid/page");
+    let response = client.send(foreign).await.unwrap();
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(seen.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -760,6 +836,36 @@ async fn request_timeout_is_retried() {
 
     let response = client.get(format!("{}/stall", server.uri())).await.unwrap();
     assert_eq!(response.text().await.unwrap(), "fast");
+}
+
+/// A per-attempt timeout on a `POST` is not retried: the server may be in
+/// the middle of processing it. `.expect(1)` fails the test on a replay.
+#[tokio::test]
+async fn post_timeout_is_not_retried() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/stall"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(3)))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = quick()
+        .retries(2)
+        .timeout(Duration::from_millis(200))
+        .build()
+        .unwrap();
+    let err = client
+        .request(reqwest::Method::POST, format!("{}/stall", server.uri()))
+        .body("x=1")
+        .send()
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(&err, Error::Reqwest(e) if e.is_timeout()),
+        "{err:?}"
+    );
 }
 
 #[tokio::test]
@@ -929,6 +1035,29 @@ async fn proxy_407_is_retried_for_a_post() {
     assert_eq!(response.text().await.unwrap(), "via-b");
     assert_eq!(auth_seen.load(Ordering::SeqCst), 1);
     assert_eq!(good_seen.load(Ordering::SeqCst), 1);
+}
+
+/// A connect failure proves the proxy never forwarded anything, so a
+/// `POST` is replayed through the next proxy exactly like a `GET`.
+#[tokio::test]
+async fn post_is_retried_after_a_connect_failure_through_a_proxy() {
+    let (good_proxy, good_seen) = raw_server(0, OK_RESPONSE).await;
+
+    let client = quick()
+        .proxies(["http://127.0.0.1:1", good_proxy.as_str()])
+        .retries(1)
+        .build()
+        .unwrap();
+    let response = client
+        .request(reqwest::Method::POST, "http://example.invalid/page")
+        .body("x=1")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(good_seen.load(Ordering::SeqCst), 1);
+    assert!(client.proxies().in_cooldown("http://127.0.0.1:1"));
 }
 
 #[tokio::test]
@@ -1334,6 +1463,42 @@ async fn configure_hook_applies_to_the_underlying_clients() {
         .unwrap();
 
     let response = client.get(server.uri()).await.unwrap();
+    assert_eq!(response.status(), 200);
+}
+
+/// `configure` and `user_agent` run on the proxy clients too, not only the
+/// direct one. A `MockServer` stands in for an HTTP proxy: for an `http://`
+/// target it receives the whole request, headers included. The request is
+/// built by a bare `reqwest::Client`, so it carries no default headers of
+/// its own; whatever reaches the proxy came from the proxy client.
+#[tokio::test]
+async fn configure_and_user_agent_apply_to_the_proxy_clients() {
+    let proxy = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(header("x-configured", "yes"))
+        .and(header("user-agent", "reqwest-rotate-tests/2"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&proxy)
+        .await;
+
+    let client = quick()
+        .proxies([proxy.uri()])
+        .user_agent("reqwest-rotate-tests/2")
+        .configure(|builder| {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-configured", HeaderValue::from_static("yes"));
+            builder.default_headers(headers)
+        })
+        .build()
+        .unwrap();
+
+    let request = reqwest::Client::new()
+        .get("http://example.invalid/page")
+        .build()
+        .unwrap();
+    let response = client.execute(request).await.unwrap();
+
     assert_eq!(response.status(), 200);
 }
 
