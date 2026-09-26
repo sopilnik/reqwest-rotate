@@ -6,6 +6,11 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `ProxyList::mark_good`. Takes a proxy out of cooldown early: your own
+  health check saw it answer, or you put it there with `mark_bad`.
+
 ### Changed
 
 - `retries(n)` is now exact. reqwest's own retry layer is switched

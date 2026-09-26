@@ -162,7 +162,9 @@ impl RotatingClient {
     }
 
     /// Returns the [`ProxyList`] this client rotates over: e.g. to inspect
-    /// or react to which proxies are currently in cooldown.
+    /// or react to which proxies are currently in cooldown, or to clear a
+    /// cooldown early with `mark_good()` once your own check sees a proxy
+    /// answer.
     ///
     /// Calling `pick()` on the returned list advances this client's
     /// rotation and clears an expired cooldown; `as_slice()`, `len()` and

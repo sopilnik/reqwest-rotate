@@ -17,8 +17,9 @@ use crate::error::Error;
 /// default ports are dropped, duplicates (after canonicalisation) are
 /// removed, and SOCKS schemes are rejected unless the `socks` feature is
 /// enabled. [`pick`](Self::pick) and [`as_slice`](Self::as_slice) return
-/// the canonical form; [`mark_bad`](Self::mark_bad) and
-/// [`in_cooldown`](Self::in_cooldown) accept either form.
+/// the canonical form; [`mark_bad`](Self::mark_bad),
+/// [`mark_good`](Self::mark_good) and [`in_cooldown`](Self::in_cooldown)
+/// accept either form.
 ///
 /// All state lives behind an internal mutex that is never held across an
 /// `.await`, so a single `ProxyList` can be used concurrently from many
@@ -140,7 +141,8 @@ impl ProxyList {
     /// A proxy that then answers a request sent through a
     /// [`RotatingClient`](crate::RotatingClient) that rotates over this
     /// list is taken out of cooldown at once; the others stay marked until
-    /// their own cooldown expires.
+    /// their own cooldown expires or [`mark_good`](Self::mark_good) clears
+    /// it.
     pub fn pick(&self) -> Option<&str> {
         self.pick_index().map(|idx| self.proxies[idx].as_str())
     }
@@ -192,9 +194,11 @@ impl ProxyList {
     }
 
     /// Marks a proxy as bad for `cooldown`: [`pick`](Self::pick) will skip
-    /// it, unless every proxy is unhealthy, until the cooldown expires or
-    /// the proxy answers a request sent through a
-    /// [`RotatingClient`](crate::RotatingClient), whichever comes first.
+    /// it, unless every proxy is unhealthy, until the cooldown expires, the
+    /// proxy answers a request sent through a
+    /// [`RotatingClient`](crate::RotatingClient), or
+    /// [`mark_good`](Self::mark_good) is called for it, whichever comes
+    /// first.
     ///
     /// `proxy` is matched in canonical form, so both what
     /// [`pick`](Self::pick) returned and what you originally configured
@@ -204,6 +208,24 @@ impl ProxyList {
         match self.position(proxy) {
             Some(idx) => {
                 self.mark_bad_index(idx, cooldown);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Takes a proxy out of cooldown before it expires: your own health
+    /// check saw it answer, or you put it there with `mark_bad`.
+    ///
+    /// `proxy` is matched in canonical form, so both what
+    /// [`pick`](Self::pick) returned and what you originally configured
+    /// work. Returns `false` if it is not in this list, in which case
+    /// nothing changes. A proxy that is not in cooldown is left as it is;
+    /// this still returns `true`, since it is in the list either way.
+    pub fn mark_good(&self, proxy: &str) -> bool {
+        match self.position(proxy) {
+            Some(idx) => {
+                self.mark_good_index(idx);
                 true
             }
             None => false,
@@ -510,6 +532,39 @@ mod tests {
         list.mark_good_index(0);
         assert!(!list.in_cooldown("http://a"));
         assert_eq!(list.pick(), Some("http://a/"));
+    }
+
+    #[test]
+    fn mark_good_clears_a_cooldown_early() {
+        let list = list(&["http://a", "http://b"]);
+        assert_eq!(list.pick(), Some("http://a/"));
+        assert!(list.mark_bad("http://b", Duration::from_secs(60)));
+        assert!(list.in_cooldown("http://b/"));
+        // The un-canonicalised spelling is accepted too.
+        assert!(list.mark_good("b"));
+        assert!(!list.in_cooldown("http://b/"));
+        assert_eq!(list.pick(), Some("http://b/"));
+    }
+
+    #[test]
+    fn mark_good_on_unknown_proxy_is_a_no_op() {
+        let list = list(&["http://a", "http://b"]);
+        assert_eq!(list.pick(), Some("http://a/"));
+        assert!(list.mark_bad("http://b", Duration::from_secs(60)));
+        assert!(!list.mark_good("http://nope"));
+        assert!(!list.mark_good("not a url at all"));
+        // "b" is still cooling down, so "a" is served again.
+        assert!(list.in_cooldown("http://b/"));
+        assert_eq!(list.pick(), Some("http://a/"));
+    }
+
+    #[test]
+    fn mark_good_on_a_healthy_proxy_changes_nothing() {
+        let list = list(&["http://a", "http://b", "http://c"]);
+        assert!(list.mark_good("http://b"));
+        assert_eq!(list.pick(), Some("http://a/"));
+        assert_eq!(list.pick(), Some("http://b/"));
+        assert_eq!(list.pick(), Some("http://c/"));
     }
 
     #[test]

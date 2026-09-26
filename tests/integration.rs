@@ -873,6 +873,27 @@ async fn a_proxy_that_answers_leaves_cooldown() {
 }
 
 #[tokio::test]
+async fn mark_good_lets_a_client_use_a_proxy_early() {
+    let (first, first_seen) = raw_server(0, OK_RESPONSE).await;
+    let (second, second_seen) = raw_server(0, OK_RESPONSE).await;
+
+    let pool = ProxyList::new([first.as_str(), second.as_str()]).unwrap();
+    pool.mark_bad(&first, Duration::from_secs(60));
+    pool.mark_bad(&second, Duration::from_secs(120));
+
+    let client = quick().proxy_list(pool).retries(0).build().unwrap();
+    assert!(client.proxies().mark_good(&second));
+
+    let response = client.get("http://example.invalid/x").await.unwrap();
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(first_seen.load(Ordering::SeqCst), 0);
+    assert_eq!(second_seen.load(Ordering::SeqCst), 1);
+    assert!(client.proxies().in_cooldown(&first));
+    assert!(!client.proxies().in_cooldown(&second));
+}
+
+#[tokio::test]
 async fn origin_403_does_not_blame_the_proxy() {
     let (proxy, seen) = raw_server(
         0,
