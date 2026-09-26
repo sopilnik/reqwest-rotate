@@ -5,12 +5,12 @@ edition = "2024"
 rust-version = "1.85"
 authors = ["Alexandr Sopilnik"]
 license = "MIT OR Apache-2.0"
-description = "A boring reqwest client wrapper: proxy rotation, per-host rate limiting, and retry-with-backoff."
+description = "reqwest client wrapper with proxy rotation, per-host rate limiting and retry-with-backoff"
 repository = "https://github.com/sopilnik/reqwest-rotate"
 readme = "README.md"
 keywords = ["reqwest", "proxy", "rate-limit", "retry", "scraping"]
-categories = ["web-programming::http-client"]
-exclude = [".github/", "deny.toml"]
+categories = ["web-programming::http-client", "network-programming"]
+exclude = [".github/", ".gitignore", "deny.toml"]
 
 [package.metadata.docs.rs]
 all-features = true

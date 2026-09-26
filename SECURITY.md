@@ -4,6 +4,8 @@
 
 Only the latest version gets security fixes. I don't backport fixes to older versions.
 
+CI checks the dependencies against the RustSec advisory database on every push to `main`, on every pull request and once a week. If an advisory means this crate has to require a newer version of a dependency, I release that as a patch version.
+
 ## Reporting a vulnerability
 
 Please don't open a public issue for a security problem. Report it privately instead: go to the Security tab of this repository and click the "Report a vulnerability" button.
