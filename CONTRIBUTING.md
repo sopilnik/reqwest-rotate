@@ -38,6 +38,8 @@ Because of `--locked`, commit `Cargo.lock` if your change updates it.
 
 CI also runs `cargo check --all-features --locked` on Rust 1.85, the minimum supported version. Only the library is checked there, because the dev-dependencies need a newer compiler. If your change needs a newer Rust version, say so in the pull request.
 
+On top of that, CI runs the test suite on macOS and Windows, checks every feature on its own and in pairs, checks that the crate still builds with the lowest dependency versions `Cargo.toml` allows, and compares the public API with the last release; none of that needs to run locally.
+
 ## Pull requests
 
 Say what you changed and why, and link the issue, for example `Fixes #12`. Please send unrelated formatting or refactoring as a separate pull request.
