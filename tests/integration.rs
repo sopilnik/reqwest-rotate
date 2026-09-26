@@ -432,6 +432,27 @@ async fn retry_after_missing_falls_back_to_backoff() {
 }
 
 #[tokio::test]
+async fn retry_after_zero_is_not_an_instant_retry() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/zero"))
+        .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "0"))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/zero"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let client = quick().retries(2).build().unwrap();
+    let response = client.get(format!("{}/zero", server.uri())).await.unwrap();
+
+    assert_eq!(response.status(), 200);
+}
+
+#[tokio::test]
 async fn rate_limit_enforces_min_interval_per_host() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

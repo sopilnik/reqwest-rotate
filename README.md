@@ -92,8 +92,9 @@ switched off, so `retries()` counts attempts exactly, unless `configure(..)` set
 policy of its own.
 
 Delays are full-jitter exponential with a configurable cap. A `Retry-After` header
-(seconds or HTTP-date) replaces the computed delay; ask for longer than
-`max_retry_after` (30 s by default) and you get the response instead of an early retry.
+(seconds or HTTP-date) can lengthen the wait but never shortens it, so `Retry-After: 0`
+gets the same backoff as no header at all. Ask for longer than `max_retry_after`
+(30 s by default) and you get the response instead of an early retry.
 Before a retry, roughly 64 KiB of the failed response's body is read so the connection
 can be reused. A bigger error page costs a reconnect on HTTP/1 or a reset stream on
 HTTP/2, not the memory to buffer it. After the last of N+1 attempts you get the

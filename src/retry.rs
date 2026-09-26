@@ -162,6 +162,14 @@ pub(crate) fn error_kind(err: &reqwest::Error) -> &'static str {
     }
 }
 
+/// Combines a parsed `Retry-After` with the computed backoff: the header
+/// may lengthen the wait, never shorten it. A server that keeps answering
+/// `429` with `Retry-After: 0` would otherwise get every remaining retry
+/// back to back, which defeats the point of backing off at all.
+pub(crate) fn response_delay(asked: Option<Duration>, backoff: Duration) -> Duration {
+    asked.map_or(backoff, |asked| asked.max(backoff))
+}
+
 /// Parses a `Retry-After` header value: either delta-seconds (`"120"`) or an
 /// HTTP-date (`"Wed, 21 Oct 2015 07:28:00 GMT"`). Returns `None` if the
 /// header is absent, unparseable, or names a time already in the past.
@@ -448,6 +456,36 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error_kind(&err), "never sent");
+    }
+
+    #[test]
+    fn retry_after_zero_waits_the_backoff() {
+        let backoff = Duration::from_millis(200);
+        assert_eq!(response_delay(Some(Duration::ZERO), backoff), backoff);
+    }
+
+    #[test]
+    fn retry_after_below_the_backoff_is_raised_to_it() {
+        let backoff = Duration::from_secs(2);
+        assert_eq!(
+            response_delay(Some(Duration::from_millis(500)), backoff),
+            backoff
+        );
+    }
+
+    #[test]
+    fn retry_after_above_the_backoff_wins() {
+        let asked = Duration::from_secs(5);
+        assert_eq!(
+            response_delay(Some(asked), Duration::from_millis(200)),
+            asked
+        );
+    }
+
+    #[test]
+    fn no_retry_after_means_the_backoff() {
+        let backoff = Duration::from_millis(200);
+        assert_eq!(response_delay(None, backoff), backoff);
     }
 
     #[test]

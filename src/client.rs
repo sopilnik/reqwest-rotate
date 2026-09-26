@@ -14,7 +14,7 @@ use crate::rate_limit::RateLimiter;
 use crate::retry::error_kind;
 use crate::retry::{
     backoff_delay, is_idempotent, is_proxy_failure_status, is_retryable_status, is_transport_error,
-    retry_after, should_retry_error,
+    response_delay, retry_after, should_retry_error,
 };
 use crate::trace_log;
 
@@ -257,15 +257,18 @@ impl RotatingClient {
                     let delay = if let Some(idx) = blamed_proxy {
                         switch_delay(inner, attempt, idx)
                     } else {
-                        match retry_after(response.headers()) {
+                        let asked = retry_after(response.headers());
+                        match asked {
                             Some(asked) if asked > inner.max_retry_after => {
                                 trace_log!(
                                     "server asked to wait {asked:?}, above max_retry_after: returning {status}"
                                 );
                                 return Ok(response);
                             }
-                            Some(asked) => asked,
-                            None => backoff_delay(attempt, inner.backoff_base, inner.backoff_max),
+                            _ => response_delay(
+                                asked,
+                                backoff_delay(attempt, inner.backoff_base, inner.backoff_max),
+                            ),
                         }
                     };
                     trace_log!("retrying after {delay:?}, status={status}");
@@ -617,9 +620,9 @@ impl RotatingClientBuilder {
 
     /// Exponential backoff base delay and the cap applied to it. Default:
     /// 200 ms base, 30 s max, both capped at a year. These pace the delays
-    /// this client computes itself; a wait the server asks for in
-    /// `Retry-After` is bounded separately by
-    /// [`max_retry_after`](Self::max_retry_after).
+    /// this client computes itself. A `Retry-After` header can only
+    /// lengthen such a delay, and how long it may ask for is bounded
+    /// separately by [`max_retry_after`](Self::max_retry_after).
     #[must_use]
     pub const fn backoff(mut self, base: Duration, max: Duration) -> Self {
         self.backoff_base = Some(base);
@@ -631,9 +634,10 @@ impl RotatingClientBuilder {
     /// at a year.
     ///
     /// A `Retry-After` header on a retryable response replaces the computed
-    /// backoff delay. If the server asks for more than this, the response
-    /// is returned instead of retrying early against its wishes. Check the
-    /// status and the header yourself in that case.
+    /// backoff delay when it asks for longer; a shorter one, `0` included,
+    /// leaves the backoff as it is. If the server asks for more than this,
+    /// the response is returned instead of retrying early against its
+    /// wishes. Check the status and the header yourself in that case.
     #[must_use]
     pub const fn max_retry_after(mut self, max: Duration) -> Self {
         self.max_retry_after = Some(max);

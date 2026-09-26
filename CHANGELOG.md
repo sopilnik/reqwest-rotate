@@ -21,6 +21,10 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- A `Retry-After` header can no longer shorten the wait below the
+  computed backoff, only lengthen it. Before, a server answering `429`
+  with `Retry-After: 0` got every remaining retry back to back with no
+  backoff at all.
 - `retries(n)` is now exact. reqwest's own retry layer is switched
   off on every client this crate builds. Before, reqwest could
   resend an HTTP/2 request after `REFUSED_STREAM` or

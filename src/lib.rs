@@ -38,8 +38,9 @@
 //! - Responses with status 408, 429 or 503, for every request; other 5xx
 //!   (except 501 and 505) only for idempotent requests, since a `POST` the
 //!   server processed and then failed to answer would be duplicated.
-//!   Backoff is full-jitter exponential; a `Retry-After` header, when
-//!   present, replaces the computed delay. If the server asks for a wait
+//!   Backoff is full-jitter exponential. A `Retry-After` header can
+//!   lengthen the wait but never shortens it: `Retry-After: 0` gets the
+//!   same backoff as no header at all. If the server asks for a wait
 //!   longer than `max_retry_after` (30 s by default), the response is
 //!   returned right away instead of retrying early against its wishes.
 //! - A `407` answered by a configured proxy, for every request including
