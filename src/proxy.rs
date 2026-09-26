@@ -131,9 +131,7 @@ impl ProxyList {
     }
 
     /// The proxy at `idx` with any `user:password@` replaced by `***@`,
-    /// for logs. Only referenced from `trace_log!` call sites, which
-    /// compile away without the `tracing` feature.
-    #[cfg_attr(not(feature = "tracing"), allow(dead_code))]
+    /// for logs and for the proxy field of an `on_retry` event.
     pub(crate) fn redacted(&self, idx: usize) -> String {
         redact_userinfo(&self.proxies[idx])
     }

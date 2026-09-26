@@ -145,6 +145,72 @@ pub(crate) fn should_retry_error(err: &reqwest::Error, idempotent: bool) -> bool
     is_never_sent_error(err) || (idempotent && is_transport_error(err))
 }
 
+/// One retry about to happen, passed to
+/// [`on_retry`](crate::RotatingClientBuilder::on_retry) before the client
+/// waits and tries again.
+///
+/// More fields may be added later, so this can't be constructed or matched
+/// exhaustively outside the crate.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct RetryEvent {
+    /// The zero-based number of the attempt that failed; the retry this
+    /// event announces is `attempt + 1`.
+    pub attempt: u32,
+    /// Why the attempt is being retried.
+    pub reason: RetryReason,
+    /// The proxy that carried the failed attempt, with any
+    /// `user:password@` replaced by `***@`. `None` for a direct request.
+    pub proxy: Option<String>,
+    /// The backoff the client sleeps before the next attempt; the rate
+    /// limiter may add its own wait on top. Zero when the next attempt goes
+    /// through another proxy without waiting, and possible under full
+    /// jitter as well.
+    pub delay: Duration,
+}
+
+/// Why an attempt is being retried.
+///
+/// More variants may be added later, so this can't be matched exhaustively
+/// outside the crate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RetryReason {
+    /// A retryable answer from the origin: `408`, `429`, `503`, or, for
+    /// idempotent requests, any other `5xx` except `501` and `505`.
+    Status(StatusCode),
+    /// A `407` from the proxy itself; that proxy goes into cooldown.
+    ProxyStatus(StatusCode),
+    /// A per-attempt or connect timeout.
+    Timeout,
+    /// A connect failure: to the server on a direct request, to the proxy,
+    /// or through the proxy's `CONNECT` tunnel.
+    Connect,
+    /// A failure that proves the request never reached the server: a
+    /// cancelled dispatch, an HTTP/2 `REFUSED_STREAM`, or an unprocessed
+    /// graceful `GOAWAY`.
+    NeverSent,
+    /// Any other transport failure after the request was sent, retried
+    /// only for idempotent requests.
+    Transport,
+}
+
+/// Classifies an error already accepted by [`should_retry_error`] into the
+/// [`RetryReason`] a caller sees. An accepted error that is not a timeout,
+/// a connect failure or never sent can only be a transport error on an
+/// idempotent request, so unlike `error_kind` this needs no `other` case.
+pub(crate) fn retry_reason(err: &reqwest::Error) -> RetryReason {
+    if err.is_timeout() {
+        RetryReason::Timeout
+    } else if err.is_connect() {
+        RetryReason::Connect
+    } else if is_never_sent_error(err) {
+        RetryReason::NeverSent
+    } else {
+        RetryReason::Transport
+    }
+}
+
 /// Short label for a transport failure, for log lines that must not
 /// carry the error's own text (it embeds the request URL).
 #[cfg_attr(not(feature = "tracing"), allow(dead_code))]
@@ -340,6 +406,7 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error_kind(&err), "connect");
+        assert_eq!(retry_reason(&err), RetryReason::Connect);
 
         let builder_err = reqwest::Proxy::all("http://[").unwrap_err();
         assert_eq!(error_kind(&builder_err), "other");
@@ -369,6 +436,7 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error_kind(&err), "timeout");
+        assert_eq!(retry_reason(&err), RetryReason::Timeout);
     }
 
     #[tokio::test]
@@ -425,6 +493,7 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error_kind(&err), "transport");
+        assert_eq!(retry_reason(&err), RetryReason::Transport);
     }
 
     #[tokio::test]
@@ -456,6 +525,7 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error_kind(&err), "never sent");
+        assert_eq!(retry_reason(&err), RetryReason::NeverSent);
     }
 
     #[test]

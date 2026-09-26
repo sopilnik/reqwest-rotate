@@ -23,6 +23,12 @@ and this project uses [Semantic Versioning](https://semver.org/).
   rotation instead of waiting: a per-IP rate limit does not bind
   another IP. The `429`'s `Retry-After` is ignored and the limited
   proxy is not put in cooldown. Off by default.
+- `RotatingClientBuilder::on_retry`. Runs a callback before each retry
+  with the attempt number, why it failed, the proxy in use (redacted
+  the same way as `tracing` output) and the coming delay, for counters
+  and metrics that do not want a tracing subscriber. `RetryEvent` and
+  `RetryReason` are `#[non_exhaustive]`, so more fields and variants
+  can be added later without a breaking change.
 
 ### Changed
 

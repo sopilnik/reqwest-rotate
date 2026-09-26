@@ -98,7 +98,8 @@
 //! the `socks` cargo feature (without it they are rejected by `build()`
 //! instead of silently misbehaving). A bare `host:port` is accepted and
 //! treated as `http://host:port`. Proxy credentials are hidden from
-//! `Debug` output, error messages, and `tracing` events.
+//! `Debug` output, error messages, `tracing` events, and the `proxy`
+//! field of an [`on_retry`](RotatingClientBuilder::on_retry) event.
 //!
 //! # Timeouts
 //!
@@ -119,6 +120,15 @@
 //! [`proxy_list`](RotatingClientBuilder::proxy_list), so every client
 //! built from them shares its cooldowns; see the builder for the
 //! details.
+//!
+//! # Watching retries
+//!
+//! With the `tracing` feature on, every retry is logged at debug level.
+//! For counters and metrics without a tracing subscriber,
+//! [`on_retry`](RotatingClientBuilder::on_retry) runs a callback before
+//! each retry with the failed attempt, the reason, the proxy and the
+//! delay. The two work together or apart, and both hide proxy
+//! credentials the same way.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -140,6 +150,7 @@ pub(crate) const MAX_DURATION: std::time::Duration =
 pub use client::{RequestBuilder, RotatingClient, RotatingClientBuilder};
 pub use error::Error;
 pub use proxy::ProxyList;
+pub use retry::{RetryEvent, RetryReason};
 
 /// `tracing::debug!` with the `tracing` feature on, nothing without it, so
 /// call sites need no `#[cfg]` of their own. Helpers that exist only to

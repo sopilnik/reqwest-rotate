@@ -13,8 +13,9 @@ use crate::rate_limit::RateLimiter;
 #[cfg(feature = "tracing")]
 use crate::retry::error_kind;
 use crate::retry::{
-    backoff_delay, is_idempotent, is_proxy_failure_status, is_retryable_status, is_transport_error,
-    response_delay, retry_after, should_retry_error,
+    RetryEvent, RetryReason, backoff_delay, is_idempotent, is_proxy_failure_status,
+    is_retryable_status, is_transport_error, response_delay, retry_after, retry_reason,
+    should_retry_error,
 };
 use crate::trace_log;
 
@@ -38,6 +39,10 @@ const DRAIN_BUDGET: usize = 64 * 1024;
 /// settings. Called once per underlying client (one direct, one per proxy).
 type ConfigureFn = dyn Fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder + Send + Sync;
 
+/// Hook run before each retry, given the event described at
+/// [`RotatingClientBuilder::on_retry`].
+type RetryHook = dyn Fn(&RetryEvent) + Send + Sync;
+
 /// An HTTP client that rotates across a pool of proxies, rate-limits
 /// requests per host, and retries transient failures with backoff.
 ///
@@ -53,7 +58,6 @@ pub struct RotatingClient {
     inner: Arc<Inner>,
 }
 
-#[derive(Debug)]
 struct Inner {
     /// Client used when no proxy is picked for an attempt.
     direct_client: reqwest::Client,
@@ -67,6 +71,38 @@ struct Inner {
     max_retry_after: Duration,
     proxy_cooldown: Duration,
     switch_proxy_on_429: bool,
+    on_retry: Option<Arc<RetryHook>>,
+}
+
+impl fmt::Debug for Inner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Inner {
+            direct_client,
+            proxy_clients,
+            proxies,
+            rate_limiter,
+            retries,
+            backoff_base,
+            backoff_max,
+            max_retry_after,
+            proxy_cooldown,
+            switch_proxy_on_429,
+            on_retry,
+        } = self;
+        f.debug_struct("Inner")
+            .field("direct_client", direct_client)
+            .field("proxy_clients", proxy_clients)
+            .field("proxies", proxies)
+            .field("rate_limiter", rate_limiter)
+            .field("retries", retries)
+            .field("backoff_base", backoff_base)
+            .field("backoff_max", backoff_max)
+            .field("max_retry_after", max_retry_after)
+            .field("proxy_cooldown", proxy_cooldown)
+            .field("switch_proxy_on_429", switch_proxy_on_429)
+            .field("on_retry", &on_retry.as_ref().map(|_| "<fn>"))
+            .finish()
+    }
 }
 
 impl RotatingClient {
@@ -281,6 +317,18 @@ impl RotatingClient {
                             ),
                         }
                     };
+                    if let Some(hook) = &inner.on_retry {
+                        hook(&RetryEvent {
+                            attempt,
+                            reason: if blamed_proxy.is_some() {
+                                RetryReason::ProxyStatus(status)
+                            } else {
+                                RetryReason::Status(status)
+                            },
+                            proxy: proxy_idx.map(|idx| inner.proxies.redacted(idx)),
+                            delay,
+                        });
+                    }
                     trace_log!("retrying after {delay:?}, status={status}");
                     drain(response).await;
                     if !delay.is_zero() {
@@ -309,6 +357,14 @@ impl RotatingClient {
                     } else {
                         backoff_delay(attempt, inner.backoff_base, inner.backoff_max)
                     };
+                    if let Some(hook) = &inner.on_retry {
+                        hook(&RetryEvent {
+                            attempt,
+                            reason: retry_reason(&err),
+                            proxy: proxy_idx.map(|idx| inner.proxies.redacted(idx)),
+                            delay,
+                        });
+                    }
                     trace_log!("retrying after {delay:?} ({} error)", error_kind(&err));
                     if !delay.is_zero() {
                         tokio::time::sleep(delay).await;
@@ -511,7 +567,8 @@ fn spend(budget: usize, chunk_len: usize) -> usize {
 ///
 /// Clones copy the settings and share a pool given through
 /// [`proxy_list`](Self::proxy_list) and the [`configure`](Self::configure)
-/// hook: every client built from any clone rotates the same `ProxyList`,
+/// and [`on_retry`](Self::on_retry) hooks: every client built from any
+/// clone rotates the same `ProxyList`,
 /// cooldowns and rotation position included. A pool given as URLs through
 /// [`proxies`](Self::proxies) is built fresh by each [`build`](Self::build)
 /// and not shared, and each `build()` makes its own rate limiter and
@@ -531,6 +588,7 @@ pub struct RotatingClientBuilder {
     timeout: Option<Duration>,
     connect_timeout: Option<Duration>,
     configure: Option<Arc<ConfigureFn>>,
+    on_retry: Option<Arc<RetryHook>>,
 }
 
 impl fmt::Debug for RotatingClientBuilder {
@@ -556,6 +614,7 @@ impl fmt::Debug for RotatingClientBuilder {
             .field("timeout", &self.timeout)
             .field("connect_timeout", &self.connect_timeout)
             .field("configure", &self.configure.as_ref().map(|_| "<fn>"))
+            .field("on_retry", &self.on_retry.as_ref().map(|_| "<fn>"))
             .finish()
     }
 }
@@ -759,6 +818,41 @@ impl RotatingClientBuilder {
         self
     }
 
+    /// Runs `hook` once before every retry, on the task that sends the
+    /// request, with the failed attempt, the reason it failed, the proxy it
+    /// went through (redacted the same way as `tracing` output) and the
+    /// delay before the next attempt. Not called for the first attempt, nor
+    /// after the last failed one: the caller sees that result directly.
+    /// Meant for counters and metrics; keep it quick and don't block in it.
+    /// A panic in `hook` propagates to the caller of the request.
+    /// Independent of the `tracing` feature: use either, or both.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use reqwest_rotate::RotatingClient;
+    /// use std::sync::Arc;
+    /// use std::sync::atomic::{AtomicUsize, Ordering};
+    ///
+    /// let retries = Arc::new(AtomicUsize::new(0));
+    /// let counted = Arc::clone(&retries);
+    /// let client = RotatingClient::builder()
+    ///     .on_retry(move |_event| {
+    ///         counted.fetch_add(1, Ordering::Relaxed);
+    ///     })
+    ///     .build()
+    ///     .unwrap();
+    /// # let _ = client;
+    /// ```
+    #[must_use]
+    pub fn on_retry<F>(mut self, hook: F) -> Self
+    where
+        F: Fn(&RetryEvent) + Send + Sync + 'static,
+    {
+        self.on_retry = Some(Arc::new(hook));
+        self
+    }
+
     /// Builds the [`RotatingClient`], constructing one underlying
     /// `reqwest::Client` per configured proxy plus one direct client.
     ///
@@ -846,6 +940,7 @@ impl RotatingClientBuilder {
                     .min(crate::MAX_DURATION),
                 proxy_cooldown: self.proxy_cooldown.unwrap_or(DEFAULT_PROXY_COOLDOWN),
                 switch_proxy_on_429: self.switch_proxy_on_429,
+                on_retry: self.on_retry,
             }),
         })
     }

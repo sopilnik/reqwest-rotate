@@ -127,7 +127,8 @@ default, each enabling the matching `RequestBuilder` method.
 limiter), `Send + Sync`, `#![forbid(unsafe_code)]`, TLS via `rustls` by default —
 disable default features and enable `native-tls` instead to use your platform's own
 TLS. An optional `tracing` feature, off by default, logs retries and proxy rotation
-at debug level.
+at debug level; `on_retry(|event| ...)` reports each retry to a callback,
+with or without that feature.
 
 ## Why not `reqwest-proxy-pool`?
 
