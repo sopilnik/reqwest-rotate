@@ -90,7 +90,11 @@
 //! While another proxy is out of cooldown, the retry goes through it right
 //! away; once no other proxy is available, retries are paced by the
 //! backoff. Any other status is the origin's answer, and the proxy keeps
-//! its place in the rotation.
+//! its place in the rotation. Against an `https://` target, a proxy that
+//! refuses the `CONNECT` tunnel never gets to answer with a `407`. The
+//! refusal surfaces as a connect error instead: the proxy goes on
+//! cooldown, and the request is retried for every method, like any other
+//! connect failure.
 //!
 //! Only proxies you configure are used: the `HTTP_PROXY`, `HTTPS_PROXY`
 //! and `ALL_PROXY` environment variables are ignored. `http://` and
@@ -99,7 +103,11 @@
 //! instead of silently misbehaving). A bare `host:port` is accepted and
 //! treated as `http://host:port`. Proxy credentials are hidden from
 //! `Debug` output, error messages, `tracing` events, and the `proxy`
-//! field of an [`on_retry`](RotatingClientBuilder::on_retry) event.
+//! field of an [`on_retry`](RotatingClientBuilder::on_retry) event. A
+//! header added through [`configure`](RotatingClientBuilder::configure)'s
+//! `default_headers` is not: it shows up in `Debug` output exactly as it
+//! would on a plain `reqwest::Client`, unless its `HeaderValue` is marked
+//! sensitive with `set_sensitive(true)`.
 //!
 //! # Timeouts
 //!

@@ -785,7 +785,10 @@ impl RotatingClientBuilder {
     /// this builder's own settings, so it can override them. A `.retry(..)`
     /// call in here overrides the crate's own `retry(never())`, bringing
     /// reqwest's layer back and letting attempts multiply past what
-    /// [`retries`](Self::retries) counts.
+    /// [`retries`](Self::retries) counts. A header added here through
+    /// `default_headers` shows up in `Debug` output exactly as it would on
+    /// a plain `reqwest::Client`; mark its `HeaderValue` sensitive with
+    /// `set_sensitive(true)` if it should not.
     ///
     /// Anything behind a `reqwest` cargo feature (`gzip`, `brotli`,
     /// `cookies`, ...) needs that feature enabled on *your* `reqwest`

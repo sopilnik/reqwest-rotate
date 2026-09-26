@@ -68,14 +68,18 @@ connect, times out, drops the connection or answers `407` goes on cooldown and i
 skipped until the cooldown expires or the proxy answers again. If another proxy is out
 of cooldown the retry goes through it immediately; if none is, retries fall back to
 the backoff. Any other status is the origin's answer: you get it back, and the proxy
-stays healthy.
+stays healthy. Against an `https://` target, a refused `CONNECT` never shows up as
+that `407`: it surfaces as a connect error instead, which also puts the proxy on
+cooldown and is retried for every request.
 
 Only the proxies you configure are used. `HTTP_PROXY` and friends are ignored.
 `http://`, `https://` and bare `host:port` work out of the box. `socks5://` and
 friends need the `socks` feature; without it they are rejected when the client is
-built, not silently on every request. Credentials never reach `Debug` output, error
-messages or `tracing` events, and logged URLs drop their query string, so a token
-passed as a query parameter stays out of the log too.
+built, not silently on every request. Proxy credentials never reach `Debug` output,
+error messages or `tracing` events, and logged URLs drop their query string, so a
+token passed as a query parameter stays out of the log too. A header you add yourself
+through `configure(|b| b.default_headers(..))` is not redacted this way; mark its
+`HeaderValue` sensitive if it needs to be.
 
 **Per-host rate limiting.** A minimum interval between requests to the same host,
 enforced with `tokio::time`. Concurrent callers to one host are serialized, not

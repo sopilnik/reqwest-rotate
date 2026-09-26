@@ -579,6 +579,26 @@ async fn builder_clone_keeps_the_configure_hook() {
     assert_eq!(response.status(), 200);
 }
 
+#[test]
+fn configured_header_is_hidden_from_debug_only_when_marked_sensitive() {
+    let client = quick()
+        .proxies(["http://127.0.0.1:9"])
+        .configure(|builder| {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-plain", HeaderValue::from_static("visible"));
+            let mut secret = HeaderValue::from_static("SUPERSECRET");
+            secret.set_sensitive(true);
+            headers.insert("x-secret", secret);
+            builder.default_headers(headers)
+        })
+        .build()
+        .unwrap();
+
+    let debug = format!("{client:?}");
+    assert_eq!(debug.matches("\"visible\"").count(), 2, "{debug}");
+    assert!(!debug.contains("SUPERSECRET"), "{debug}");
+}
+
 #[tokio::test]
 async fn works_without_any_proxies_configured() {
     let server = MockServer::start().await;
