@@ -24,6 +24,8 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo clippy --all-targets --no-default-features --features native-tls --locked -- -D warnings
 cargo test --locked
 cargo test --all-features --locked
+cargo test --no-default-features --features native-tls --locked
+cargo check --no-default-features --features rustls-tls --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features --locked
 cargo deny check
 ```

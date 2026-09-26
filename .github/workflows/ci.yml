@@ -40,6 +40,10 @@ jobs:
         run: cargo test --locked
       - name: test (all features)
         run: cargo test --all-features --locked
+      - name: test (native-tls)
+        run: cargo test --no-default-features --features native-tls --locked
+      - name: check (rustls-tls alias)
+        run: cargo check --no-default-features --features rustls-tls --locked
       - name: doc
         run: cargo doc --no-deps --all-features --locked
         env:
