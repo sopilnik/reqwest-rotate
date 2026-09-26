@@ -32,8 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .retries(2)
         .build()?;
 
-    let response = client.get(&url).await?;
-    println!("status: {}", response.status());
+    let result = client.get(&url).await;
 
     for proxy in client.proxies().iter() {
         // The list keeps credentials so it can connect; keep them off the screen.
@@ -45,5 +44,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             client.proxies().in_cooldown(proxy)
         );
     }
+
+    let response = result?;
+    println!("status: {}", response.status());
     Ok(())
 }

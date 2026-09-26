@@ -23,15 +23,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .build()?;
 
-    let response = client.get(&url).await?;
-    println!("status: {}", response.status());
+    let result = client.get(&url).await;
 
-    let counts = counts.lock().unwrap();
-    if counts.is_empty() {
-        println!("no retries");
+    {
+        let counts = counts.lock().unwrap();
+        if counts.is_empty() {
+            println!("no retries");
+        }
+        for (reason, count) in counts.iter() {
+            println!("{reason:?}: {count}");
+        }
     }
-    for (reason, count) in counts.iter() {
-        println!("{reason:?}: {count}");
-    }
+
+    let response = result?;
+    println!("status: {}", response.status());
     Ok(())
 }
