@@ -16,10 +16,10 @@ use crate::error::Error;
 /// `host:port` becomes `http://host:port/`, scheme and host are lowercased,
 /// default ports are dropped, duplicates (after canonicalisation) are
 /// removed, and SOCKS schemes are rejected unless the `socks` feature is
-/// enabled. [`pick`](Self::pick) and [`as_slice`](Self::as_slice) return
-/// the canonical form; [`mark_bad`](Self::mark_bad),
-/// [`mark_good`](Self::mark_good) and [`in_cooldown`](Self::in_cooldown)
-/// accept either form.
+/// enabled. [`pick`](Self::pick), [`as_slice`](Self::as_slice) and
+/// [`iter`](Self::iter) return the canonical form;
+/// [`mark_bad`](Self::mark_bad), [`mark_good`](Self::mark_good) and
+/// [`in_cooldown`](Self::in_cooldown) accept either form.
 ///
 /// All state lives behind an internal mutex that is never held across an
 /// `.await`, so a single `ProxyList` can be used concurrently from many
@@ -110,9 +110,15 @@ impl ProxyList {
     }
 
     /// All configured proxy URLs, canonicalised, in rotation order.
+    /// Prefer [`iter`](Self::iter); this stays available until 1.0.
     #[must_use]
     pub fn as_slice(&self) -> &[String] {
         &self.proxies
+    }
+
+    /// All configured proxy URLs, canonicalised, in rotation order.
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &str> + ExactSizeIterator {
+        self.proxies.iter().map(String::as_str)
     }
 
     /// Index of `proxy`, accepting either the canonical form or anything
@@ -459,6 +465,23 @@ mod tests {
                 "https://user:pass@proxy.example/",
                 "http://proxy.example:8080/",
             ]
+        );
+    }
+
+    #[test]
+    fn iter_yields_canonical_urls_in_rotation_order() {
+        let list = list(&["HTTP://Proxy.Example:80", "proxy-b.example:8080"]);
+        let urls: Vec<&str> = list.iter().collect();
+        assert_eq!(
+            urls,
+            &["http://proxy.example/", "http://proxy-b.example:8080/"]
+        );
+        assert_eq!(list.iter().len(), list.len());
+
+        let reversed: Vec<&str> = list.iter().rev().collect();
+        assert_eq!(
+            reversed,
+            &["http://proxy-b.example:8080/", "http://proxy.example/"]
         );
     }
 

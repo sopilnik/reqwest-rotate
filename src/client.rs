@@ -57,7 +57,7 @@ pub struct RotatingClient {
 struct Inner {
     /// Client used when no proxy is picked for an attempt.
     direct_client: reqwest::Client,
-    /// One pre-built client per proxy, parallel to `proxies.as_slice()`.
+    /// One pre-built client per proxy, parallel to `proxies.iter()`.
     proxy_clients: Vec<reqwest::Client>,
     proxies: ProxyList,
     rate_limiter: RateLimiter,
@@ -167,7 +167,7 @@ impl RotatingClient {
     /// answer.
     ///
     /// Calling `pick()` on the returned list advances this client's
-    /// rotation and clears an expired cooldown; `as_slice()`, `len()` and
+    /// rotation and clears an expired cooldown; `iter()`, `len()` and
     /// `in_cooldown()` are the read-only accessors.
     #[must_use]
     pub fn proxies(&self) -> &ProxyList {

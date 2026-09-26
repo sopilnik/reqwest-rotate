@@ -10,6 +10,9 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 - `ProxyList::mark_good`. Takes a proxy out of cooldown early: your own
   health check saw it answer, or you put it there with `mark_bad`.
+- `ProxyList::iter`. Yields the configured proxies as an iterator
+  instead of a slice, so code that reads the list no longer depends
+  on how it is stored. `as_slice` stays available until 1.0.
 
 ### Changed
 
