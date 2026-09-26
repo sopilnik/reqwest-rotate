@@ -1,8 +1,12 @@
 # reqwest-rotate
 
+<div style="display:none">
+
 [![crates.io](https://img.shields.io/crates/v/reqwest-rotate.svg)](https://crates.io/crates/reqwest-rotate)
 [![docs.rs](https://docs.rs/reqwest-rotate/badge.svg)](https://docs.rs/reqwest-rotate)
 [![CI](https://github.com/sopilnik/reqwest-rotate/actions/workflows/ci.yml/badge.svg?event=push)](https://github.com/sopilnik/reqwest-rotate/actions)
+
+</div>
 
 A small `reqwest` client wrapper for scrapers and API clients that need proxy
 rotation, per-host rate limiting, and retry-with-backoff, without pulling in
@@ -33,7 +37,7 @@ reqwest-rotate = { version = "0.1", default-features = false, features = ["nativ
 
 ## Example
 
-```rust
+```rust,no_run
 use reqwest_rotate::RotatingClient;
 use std::time::Duration;
 
@@ -67,21 +71,28 @@ rate-limited, retrying client with sane timeouts.
 
 **Proxy rotation.** Round-robin over the list you configure. A proxy that fails to
 connect, times out, drops the connection or answers `407` goes on cooldown and is
-skipped until the cooldown expires or the proxy answers again. If another proxy is out
-of cooldown the retry goes through it immediately; if none is, retries fall back to
-the backoff. Any other status is the origin's answer: you get it back, and the proxy
-stays healthy. Against an `https://` target, a refused `CONNECT` never shows up as
-that `407`: it surfaces as a connect error instead, which also puts the proxy on
-cooldown and is retried for every request.
+skipped until the cooldown expires or the proxy answers again. A `Retry-After` on
+that `407` is deliberately not honoured, since the wait belongs to the failed proxy,
+not to the server. A per-attempt timeout counts as the proxy's failure, since the
+client cannot tell a stalled proxy from a stalled origin; blaming it is cheap: the
+mark clears the first time the proxy answers again.
+
+If another proxy is out of cooldown the retry goes through it immediately; if none
+is, retries fall back to the backoff. Any other status is the origin's answer: you
+get it back, and the proxy stays healthy. Against an `https://` target, a refused
+`CONNECT` never shows up as that `407`: it surfaces as a connect error instead,
+which also puts the proxy on cooldown and is retried for every request.
 
 Only the proxies you configure are used. `HTTP_PROXY` and friends are ignored.
-`http://`, `https://` and bare `host:port` work out of the box. `socks5://` and
-friends need the `socks` feature; without it they are rejected when the client is
-built, not silently on every request. Proxy credentials never reach `Debug` output,
-error messages or `tracing` events, and logged URLs drop their query string, so a
-token passed as a query parameter stays out of the log too. A header you add yourself
-through `configure(|b| b.default_headers(..))` is not redacted this way; mark its
-`HeaderValue` sensitive if it needs to be.
+`http://`, `https://` and bare `host:port` (treated as `http://host:port`) work out
+of the box. `socks5://` and friends need the `socks` feature; without it they are
+rejected when the client is built, not silently on every request. Proxy credentials
+never reach `Debug` output, error messages, `tracing` events, or the `proxy` field
+of an `on_retry` event, and logged URLs drop their query string, so a token passed as
+a query parameter stays out of the log too. A header you add yourself through
+`configure(|b| b.default_headers(..))` is not redacted this way: it shows up in
+`Debug` output exactly as it would on a plain `reqwest::Client`. Mark its
+`HeaderValue` sensitive with `set_sensitive(true)` if it needs to be.
 
 **Per-host rate limiting.** A minimum interval between requests to the same host
 name; port and scheme are not part of the key, so `http://` and `https://` traffic
@@ -90,30 +101,42 @@ callers to one host are serialized, not dropped.
 
 **Retry with backoff.** `408`, `429` and `503` are retried for every request. Other
 `5xx` (except `501`/`505`), request timeouts and connections dropped before a response
-arrived are retried for idempotent methods only, so a `POST` is never duplicated. The
-one exception is a `407` from a proxy, which never forwarded the request. Connect
-failures, HTTP/2 `REFUSED_STREAM`, and a graceful HTTP/2 `GOAWAY(NO_ERROR)` that left
-the request unprocessed are retried for everything; a `GOAWAY` naming an actual error
-code is idempotent-only, like a stream reset. reqwest's own retry layer is
-switched off, so `retries()` counts attempts exactly, unless `configure(..)` sets a
-policy of its own. With `switch_proxy_on_429(true)`, a `429` that came through a proxy
-is retried at once through the next proxy in rotation instead of waiting on its
-`Retry-After`, since a per-IP limit does not bind another IP; off by default.
+arrived (the classic keep-alive race of long-running scrapers) are retried for
+idempotent methods only (`GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE`, `TRACE`), so a
+`POST` is never duplicated. The one exception is a `407` from a proxy, which never
+forwarded the request. Connect failures (including connect timeouts), requests
+cancelled before dispatch, HTTP/2 `REFUSED_STREAM`, and a graceful HTTP/2
+`GOAWAY(NO_ERROR)` that left the request unprocessed prove the server never acted on
+the request and are retried for everything; a `GOAWAY` naming an actual error code
+is idempotent-only, like a stream reset.
+
+reqwest's own retry layer is switched off, so `retries()` counts attempts exactly,
+unless `configure(..)` sets a policy of its own. With `switch_proxy_on_429(true)` and
+another proxy out of cooldown, a `429` that came through a proxy is retried at once
+through the next proxy in rotation instead of waiting on its `Retry-After`, since a
+per-IP limit does not bind another IP. The limited proxy is not put in cooldown. Off
+by default.
 
 Delays are full-jitter exponential with a configurable cap. A `Retry-After` header
 (seconds or HTTP-date) can lengthen the wait but never shortens it, so `Retry-After: 0`
 gets the same backoff as no header at all. Ask for longer than `max_retry_after`
 (30 s by default) and you get the response instead of an early retry.
+
 Before a retry, roughly 64 KiB of the failed response's body is read so the connection
 can be reused. A bigger error page costs a reconnect on HTTP/1 or a reset stream on
 HTTP/2, not the memory to buffer it. After the last of N+1 attempts you get the
 response as-is: check `status()`, or call `error_for_status()`, exactly as with
-`reqwest`.
+`reqwest`. A transport error is returned as `Error::Reqwest`; its message is the
+short `request failed`, and the cause is the error's `source`, which `anyhow`'s
+`{:#}` and most reporters print for you.
 
-**Timeouts by default.** 30 s per attempt, 10 s to connect, so a proxy that black-holes
-connections cannot hang a request forever. Both are configurable. They bound one
-attempt, not the whole call; wrap it in `tokio::time::timeout` for a hard overall
-budget.
+**Timeouts by default.** A bare `reqwest::Client` has none by default. This one has
+both: 30 s per attempt, 10 s to connect, so a proxy that black-holes connections
+cannot hang a request forever. Both are configurable. They bound one attempt, not
+the whole call; wrap it in `tokio::time::timeout` for a hard overall budget. One trap
+for tests using `#[tokio::test(start_paused = true)]`: tokio's auto-advancing clock
+fires the request timeout the moment a task blocks on real socket I/O. Use real time
+against a local server.
 
 **Not just GET.** `request()` returns a builder wrapping `reqwest::RequestBuilder`;
 calling `.send()` on it routes the request through the same rate limiting, rotation
@@ -133,10 +156,14 @@ default, each enabling the matching `RequestBuilder` method.
 `RotatingClient` is `Clone` (cheap; clones share pools, cooldowns and the rate
 limiter), `Send + Sync`, `#![forbid(unsafe_code)]`, TLS via `rustls` by default —
 disable default features and enable `native-tls` instead to use your platform's own
-TLS. An optional `tracing` feature, off by default, logs retries and proxy rotation
-at debug level; `on_retry(|event| ...)` reports each retry to a callback,
-with or without that feature. `examples/retry_metrics.rs` counts retries by
-reason with it.
+TLS. Clones of a `RotatingClientBuilder` share a pool given through `proxy_list`, so
+every client built from them shares its cooldowns; see the builder for the details.
+
+An optional `tracing` feature, off by default, logs retries and proxy rotation
+at debug level; `on_retry(|event| ...)` reports each retry to a callback with the
+failed attempt, the reason, the proxy and the delay, with or without that feature,
+and both hide proxy credentials the same way. `examples/retry_metrics.rs` counts
+retries by reason with it.
 
 ## Why not `reqwest-proxy-pool`?
 
@@ -154,5 +181,8 @@ compiler.
 
 ## License
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
-[MIT license](LICENSE-MIT) at your option.
+Licensed under either of [Apache License, Version 2.0][apache] or
+[MIT license][mit] at your option.
+
+[apache]: https://github.com/sopilnik/reqwest-rotate/blob/main/LICENSE-APACHE
+[mit]: https://github.com/sopilnik/reqwest-rotate/blob/main/LICENSE-MIT

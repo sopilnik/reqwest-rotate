@@ -10,6 +10,7 @@ If you want to change behavior or the public API, open an issue first so we can 
 
 - Add a test for any behavior change or bug fix. Integration tests go in `tests/`; unit tests go next to the code in `src/`.
 - Public items need doc comments. CI fails without them.
+- The crate docs on docs.rs are `README.md`; its `rust` example runs as a doctest, so keep it compiling.
 - The crate has `#![forbid(unsafe_code)]`, and I plan to keep it.
 - If users will notice the change, add a line to `CHANGELOG.md` under `## [Unreleased]` (create it if it's missing), in a group like `### Fixed`.
 - Examples go in `examples/` and must build with default features; CI's default-features clippy compiles them.
