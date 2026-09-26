@@ -61,6 +61,8 @@ async fn main() -> Result<(), reqwest_rotate::Error> {
 Proxies are optional. Call `.build()` without `.proxies(..)` and you get a plain
 rate-limited, retrying client with sane timeouts.
 
+`examples/` has three more: `get`, `proxy_pool` and `retry_metrics`.
+
 ## What it does
 
 **Proxy rotation.** Round-robin over the list you configure. A proxy that fails to
@@ -133,7 +135,8 @@ limiter), `Send + Sync`, `#![forbid(unsafe_code)]`, TLS via `rustls` by default 
 disable default features and enable `native-tls` instead to use your platform's own
 TLS. An optional `tracing` feature, off by default, logs retries and proxy rotation
 at debug level; `on_retry(|event| ...)` reports each retry to a callback,
-with or without that feature.
+with or without that feature. `examples/retry_metrics.rs` counts retries by
+reason with it.
 
 ## Why not `reqwest-proxy-pool`?
 

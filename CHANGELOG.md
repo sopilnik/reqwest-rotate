@@ -29,6 +29,10 @@ and this project uses [Semantic Versioning](https://semver.org/).
   and metrics that do not want a tracing subscriber. `RetryEvent` and
   `RetryReason` are `#[non_exhaustive]`, so more fields and variants
   can be added later without a breaking change.
+- Three runnable examples under `examples/`: `get` fetches one URL
+  with retries and backoff, `proxy_pool` rotates across proxies read
+  from `PROXIES` and reports their cooldown state, and `retry_metrics`
+  counts retries by reason with `on_retry`.
 
 ### Changed
 

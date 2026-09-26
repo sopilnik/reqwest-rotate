@@ -12,6 +12,7 @@ If you want to change behavior or the public API, open an issue first so we can 
 - Public items need doc comments. CI fails without them.
 - The crate has `#![forbid(unsafe_code)]`, and I plan to keep it.
 - If users will notice the change, add a line to `CHANGELOG.md` under `## [Unreleased]` (create it if it's missing), in a group like `### Fixed`.
+- Examples go in `examples/` and must build with default features; CI's default-features clippy compiles them.
 
 ## Checks
 
