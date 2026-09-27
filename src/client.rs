@@ -39,6 +39,16 @@ const DRAIN_BUDGET: usize = 64 * 1024;
 /// reusing the connection; a longer backoff gives it that backoff instead.
 const DRAIN_TIME_FLOOR: Duration = Duration::from_millis(250);
 
+/// How long an idle connection is kept open on each per-proxy client.
+/// Lower than reqwest's own 90 s default: round-robin spreads one host's
+/// requests over every proxy, so a (proxy, host) pair is reused far less
+/// often than a plain client's connection would be.
+const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Most idle connections kept per host on each per-proxy client, in place
+/// of reqwest's own unbounded default.
+const POOL_MAX_IDLE_PER_HOST: usize = 8;
+
 /// Hook that lets callers apply their own `reqwest::ClientBuilder`
 /// settings. Called once per underlying client (one direct, one per proxy).
 type ConfigureFn = dyn Fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder + Send + Sync;
@@ -679,9 +689,16 @@ impl RotatingClientBuilder {
     /// want them.
     ///
     /// Each proxy gets its own underlying `reqwest::Client`, built eagerly
-    /// with its own connection pool and TLS configuration. For pools of
-    /// hundreds of proxies, share one TLS config across them via
-    /// [`configure`](Self::configure) and
+    /// with its own connection pool and TLS configuration.
+    ///
+    /// Idle connections are kept for 15 s and at most 8 per host in each
+    /// of those pools, since rotation spreads a host's requests over every
+    /// proxy; raise either through [`configure`](Self::configure) with
+    /// `pool_idle_timeout` or `pool_max_idle_per_host`. A large pool can
+    /// still hold many sockets open: check the process's open-file limit.
+    ///
+    /// For pools of hundreds of proxies, share one TLS config across them
+    /// via [`configure`](Self::configure) and
     /// [`tls_backend_preconfigured`][tbp].
     ///
     /// [tbp]: reqwest::ClientBuilder::tls_backend_preconfigured
@@ -953,7 +970,16 @@ impl RotatingClientBuilder {
                             source: Box::new(e.without_url()),
                         }
                     })?;
-                    builder = builder.proxy(proxy);
+                    builder = builder
+                        .proxy(proxy)
+                        // Round-robin spreads one host's requests over every
+                        // proxy, so each (proxy, host) pair is reused far less
+                        // often than a plain client's connection would be.
+                        // reqwest's 90 s idle default would then hold roughly
+                        // one socket per pair. configure() runs after this, so
+                        // a value set there wins.
+                        .pool_idle_timeout(POOL_IDLE_TIMEOUT)
+                        .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST);
                 }
                 // Without this, reqwest would quietly route "direct"
                 // requests through HTTP_PROXY / HTTPS_PROXY / ALL_PROXY from

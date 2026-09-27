@@ -163,23 +163,28 @@ impl ProxyList {
         let now = Instant::now();
         let start = state.next_index;
 
-        // One lap looking for a proxy that is not in cooldown.
+        // One lap: return the first healthy proxy at once, and otherwise
+        // track the one that recovers soonest, preferring rotation order
+        // on ties, for the fallback below.
+        let mut soonest: Option<(usize, Instant)> = None;
         for offset in 0..len {
             let idx = (start + offset) % len;
-            let healthy = state.bad_until[idx].is_none_or(|until| now >= until);
-            if healthy {
-                state.bad_until[idx] = None;
-                state.next_index = (idx + 1) % len;
-                return Some(idx);
+            match state.bad_until[idx] {
+                Some(until) if now < until => {
+                    if soonest.is_none_or(|(_, best)| until < best) {
+                        soonest = Some((idx, until));
+                    }
+                }
+                _ => {
+                    state.bad_until[idx] = None;
+                    state.next_index = (idx + 1) % len;
+                    return Some(idx);
+                }
             }
         }
 
-        // Everything is cooling down: take the one that recovers first,
-        // preferring rotation order on ties.
-        let idx = (0..len)
-            .map(|offset| (start + offset) % len)
-            .min_by_key(|&idx| state.bad_until[idx])
-            .expect("len > 0");
+        // Everything is cooling down: take the one that recovers first.
+        let (idx, _) = soonest.expect("len > 0 and every proxy is cooling down");
         state.next_index = (idx + 1) % len;
         Some(idx)
     }

@@ -70,6 +70,15 @@ and this project uses [Semantic Versioning](https://semver.org/).
   is longer. An error body that does not end in time now costs a
   reconnect instead of stalling the retry, and a body that declares
   more than 64 KiB, or arrives over HTTP/2, is no longer read at all.
+- Each per-proxy client now caps its idle connections at 15 s and 8
+  per host, instead of reqwest's own 90 s and unbounded defaults.
+  Round-robin spreads one host's traffic across every proxy, so the
+  old defaults could leave far more idle sockets open than a plain
+  client would for the same traffic; `configure` still overrides
+  either value.
+- Requests queued for a rate-limited host now leave the configured
+  interval apart even when a busy runtime wakes them late. Before,
+  every overdue request for that host went out in the same tick.
 - The crate documentation on docs.rs is now generated from
   `README.md` instead of a separate copy in `src/lib.rs`, so there
   is one copy of it to keep current instead of two that had already

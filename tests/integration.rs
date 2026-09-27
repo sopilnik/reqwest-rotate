@@ -1742,6 +1742,58 @@ async fn configure_and_user_agent_apply_to_the_proxy_clients() {
     assert_eq!(response.status(), 200);
 }
 
+/// A keep-alive server answering every request on a connection with `200`.
+/// Returns the base URL and a counter of accepted connections, so a test
+/// can tell reuse from reconnecting.
+async fn keep_alive_ok_server() -> (String, Arc<AtomicUsize>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let connections = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&connections);
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            counter.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                while matches!(socket.read(&mut buf).await, Ok(n) if n > 0) {
+                    if socket
+                        .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok")
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    (url, connections)
+}
+
+/// An idle proxy connection is closed well before reqwest's own 90 s
+/// default would close it.
+#[tokio::test]
+#[ignore = "sleeps past the pool idle timeout"]
+async fn idle_connections_are_closed_after_the_pool_timeout() {
+    let (proxy, connections) = keep_alive_ok_server().await;
+    let client = RotatingClient::builder()
+        .proxies([proxy.as_str()])
+        .build()
+        .unwrap();
+
+    let response = client.get("http://example.invalid/").await.unwrap();
+    assert_eq!(response.status(), 200);
+
+    tokio::time::sleep(Duration::from_secs(16)).await;
+
+    let response = client.get("http://example.invalid/").await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(connections.load(Ordering::SeqCst), 2);
+}
+
 #[tokio::test]
 async fn user_agent_is_sent() {
     let server = MockServer::start().await;

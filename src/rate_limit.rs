@@ -23,6 +23,13 @@ const PRUNE_SPACING_MULTIPLE: u32 = 10;
 /// dead slots pile up before a scan.
 const MAX_PRUNE_SPACING: Duration = Duration::from_secs(1);
 
+/// A caller released no more than this before its earliest time counts as
+/// on time. tokio rounds every sleep up to the next millisecond, so
+/// sleeping out a shorter gap would land a millisecond late, and the next
+/// caller, measured from that late release, would do the same: every
+/// queued request would leave a millisecond after the one before.
+const RELEASE_SLACK: Duration = Duration::from_millis(1);
+
 /// Serialises requests to the same host so that no two requests to it start
 /// less than `min_interval` apart. `None` (or a zero interval) disables
 /// rate limiting entirely.
@@ -36,8 +43,9 @@ pub(crate) struct RateLimiter {
 }
 
 struct State {
-    /// Per host: the start time of the most recently reserved slot.
-    last: HashMap<String, Instant>,
+    /// Per host: the most recently reserved slot, and when a caller was
+    /// last actually released for it.
+    last: HashMap<String, (Instant, Option<Instant>)>,
     /// Earliest time the next prune may run, once one has happened.
     next_prune: Option<Instant>,
 }
@@ -63,6 +71,8 @@ impl RateLimiter {
     /// never held across an `.await`. If this call is dropped before its
     /// sleep completes (a `tokio::time::timeout`, say), it gives
     /// its slot back, unless another call has already queued behind it.
+    /// After a stall that wakes several queued callers at once, they leave
+    /// in the order the runtime runs them, still `min_interval` apart.
     pub(crate) async fn wait(&self, host: &str) {
         let Some(min_interval) = self.min_interval else {
             return;
@@ -73,7 +83,7 @@ impl RateLimiter {
             state.maybe_prune(now, min_interval);
 
             let (target, previous) = match state.last.get_mut(host) {
-                Some(slot) => {
+                Some((slot, _)) => {
                     let previous = *slot;
                     let earliest_next = slot.checked_add(min_interval).unwrap_or(now);
                     let target = std::cmp::max(earliest_next, now);
@@ -81,7 +91,7 @@ impl RateLimiter {
                     (target, Some(previous))
                 }
                 None => {
-                    state.last.insert(host.to_owned(), now);
+                    state.last.insert(host.to_owned(), (now, None));
                     (now, None)
                 }
             };
@@ -98,6 +108,29 @@ impl RateLimiter {
             tokio::time::sleep_until(target).await;
         }
         guard.armed = false;
+
+        // The reserved slot above spaces requests apart in theory; this
+        // spaces them apart in practice too, in case a stalled runtime woke
+        // every overdue waiter for this host in the same tick.
+        loop {
+            let wait_until = {
+                let mut state = self.lock();
+                let now = Instant::now();
+                let Some((_, released)) = state.last.get_mut(host) else {
+                    return;
+                };
+                match released.and_then(|r| r.checked_add(min_interval)) {
+                    Some(earliest) if earliest.saturating_duration_since(now) > RELEASE_SLACK => {
+                        earliest
+                    }
+                    _ => {
+                        *released = Some(now);
+                        return;
+                    }
+                }
+            };
+            tokio::time::sleep_until(wait_until).await;
+        }
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -136,10 +169,14 @@ impl Drop for Reservation<'_> {
         // Only roll back if the map still holds exactly the slot this call
         // reserved: if a later caller already queued behind it, the map
         // holds a different value and that reservation must not be touched.
-        if state.last.get(self.host) == Some(&self.target) {
+        if state
+            .last
+            .get(self.host)
+            .is_some_and(|(slot, _)| *slot == self.target)
+        {
             match self.previous {
                 Some(previous) => {
-                    if let Some(slot) = state.last.get_mut(self.host) {
+                    if let Some((slot, _)) = state.last.get_mut(self.host) {
                         *slot = previous;
                     }
                 }
@@ -165,9 +202,13 @@ impl State {
             return;
         }
         // A slot whose interval has fully elapsed is dead weight: the next
-        // caller for that host gets `now` with or without it.
+        // caller for that host gets `now` with or without it. An entry is
+        // kept while either its reserved slot or its actual release is
+        // still within the interval.
         if let Some(cutoff) = now.checked_sub(min_interval) {
-            self.last.retain(|_, slot| *slot > cutoff);
+            self.last.retain(|_, (slot, released)| {
+                *slot > cutoff || released.is_some_and(|r| r > cutoff)
+            });
         }
         let spacing = min_interval
             .saturating_mul(PRUNE_SPACING_MULTIPLE)
@@ -392,5 +433,51 @@ mod tests {
         let start = Instant::now();
         limiter.wait(host).await;
         assert_eq!(Instant::now() - start, Duration::from_millis(500));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn waiters_released_late_are_still_spaced() {
+        let interval = Duration::from_millis(100);
+        let limiter = std::sync::Arc::new(RateLimiter::new(Some(interval)));
+        limiter.wait("example.com").await;
+        let spawn = |l: std::sync::Arc<RateLimiter>| {
+            tokio::spawn(async move {
+                l.wait("example.com").await;
+                Instant::now()
+            })
+        };
+        let a = spawn(limiter.clone());
+        let b = spawn(limiter.clone());
+        tokio::task::yield_now().await;
+        // A stalled runtime: both targets pass before either waiter runs.
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let (a, b) = (a.await.unwrap(), b.await.unwrap());
+        assert!(a.max(b) - a.min(b) >= interval);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_slightly_late_release_does_not_push_the_queue_back() {
+        let interval = Duration::from_millis(10);
+        let limiter = std::sync::Arc::new(RateLimiter::new(Some(interval)));
+        let start = Instant::now();
+        limiter.wait("example.com").await;
+        let spawn = move |l: std::sync::Arc<RateLimiter>| {
+            tokio::spawn(async move {
+                l.wait("example.com").await;
+                Instant::now() - start
+            })
+        };
+        let a = spawn(limiter.clone());
+        let b = spawn(limiter.clone());
+        tokio::task::yield_now().await;
+        // A's own release lands a full tick past its slot, as it would on
+        // a busy runtime.
+        tokio::time::advance(interval + Duration::from_millis(1)).await;
+        let (a, b) = (a.await.unwrap(), b.await.unwrap());
+        assert_eq!(a, interval + Duration::from_millis(1));
+        // B's slot was due one interval after A's actual release; a
+        // release within one timer tick of that still counts as on time
+        // and must not be pushed back again.
+        assert!(b - interval * 2 < Duration::from_millis(1), "{b:?}");
     }
 }
