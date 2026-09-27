@@ -288,10 +288,7 @@ async fn post_is_retried_after_an_unprocessed_goaway() {
     assert_eq!(connections.load(Ordering::SeqCst), 2);
 }
 
-/// A `GOAWAY` naming an actual error code stays an ordinary transport
-/// error. The stream-id rule covers it too, but a server reporting its
-/// own fault may be wrong about what it processed, so a `POST` is not
-/// replayed and gets no second connection.
+/// An error-code `GOAWAY` is an ordinary transport error: no replay for `POST`.
 #[tokio::test]
 async fn post_is_not_retried_after_a_goaway_with_an_error_code() {
     let (url, connections) = goaway_then_ok_server(Reason::INTERNAL_ERROR).await;

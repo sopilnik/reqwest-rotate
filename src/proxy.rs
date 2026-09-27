@@ -76,20 +76,20 @@ impl ProxyList {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        let mut normalized: Vec<String> = Vec::new();
+        let mut canonical: Vec<String> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
         for proxy in proxies {
-            let url = normalize_proxy_url(proxy.as_ref())?;
+            let url = canonical_proxy_url(proxy.as_ref())?;
             // Order is the rotation order, so the Vec stays; the set only
             // answers "have I taken this one already" in O(1) instead of
             // scanning.
             if seen.insert(url.clone()) {
-                normalized.push(url);
+                canonical.push(url);
             }
         }
-        let bad_until = vec![None; normalized.len()];
+        let bad_until = vec![None; canonical.len()];
         Ok(Self {
-            proxies: normalized,
+            proxies: canonical,
             state: Mutex::new(State {
                 next_index: 0,
                 bad_until,
@@ -141,7 +141,7 @@ impl ProxyList {
     /// that canonicalises to it.
     fn position(&self, proxy: &str) -> Option<usize> {
         self.proxies.iter().position(|p| p == proxy).or_else(|| {
-            let canonical = normalize_proxy_url(proxy).ok()?;
+            let canonical = canonical_proxy_url(proxy).ok()?;
             self.proxies.iter().position(|p| *p == canonical)
         })
     }
@@ -415,7 +415,7 @@ fn redact_unparsable(raw: &str) -> String {
 ///
 /// Accepts `scheme://[user:pass@]host[:port]` for the supported schemes,
 /// and a bare `[user:pass@]host[:port]`, which gets `http://` prepended.
-fn normalize_proxy_url(raw: &str) -> Result<String, Error> {
+fn canonical_proxy_url(raw: &str) -> Result<String, Error> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Err(Error::invalid_proxy(

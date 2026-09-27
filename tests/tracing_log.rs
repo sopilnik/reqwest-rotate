@@ -42,10 +42,8 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuf {
 /// The attempt line must carry the request URL without its query string
 /// (where callers put secrets such as an API key) and the proxy with its
 /// `user:password@` replaced by `***@`, and no `trace_log!` site may embed
-/// a `reqwest::Error`'s own text, which repeats the URL. Port 1 is a
-/// reserved TCP port nothing listens on, so the connect through the
-/// credentialed proxy fails at once and the attempt, cooldown and retry
-/// lines of the transport-error path fire with no server involved.
+/// a `reqwest::Error`'s own text, which repeats the URL. Port 1: nothing
+/// listens, so the connect fails at once.
 #[tokio::test]
 async fn tracing_events_carry_no_secrets() {
     let buf = SharedBuf::default();

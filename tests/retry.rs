@@ -159,7 +159,7 @@ async fn a_stalled_error_body_does_not_hold_up_the_retry() {
     let response = client.get(format!("{url}/slow")).await.unwrap();
     assert_eq!(response.status(), 200);
     let waited = second.lock().unwrap().unwrap() - start;
-    // The drain gives up after 250 ms; before, it waited out the 30 s
+    // The drain gives up after 250 ms instead of waiting out the 30 s
     // per-attempt timeout.
     assert!(
         waited < Duration::from_secs(10),

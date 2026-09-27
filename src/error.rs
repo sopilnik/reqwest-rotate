@@ -17,6 +17,24 @@ use thiserror::Error;
 ///
 /// Marked `#[non_exhaustive]`: new variants may be added in a minor release
 /// without that counting as a breaking change.
+///
+/// To log the whole chain without `anyhow`, walk it yourself:
+///
+/// ```
+/// fn report(err: &reqwest_rotate::Error) -> String {
+///     let mut text = err.to_string();
+///     let mut source = std::error::Error::source(err);
+///     while let Some(cause) = source {
+///         text.push_str(": ");
+///         text.push_str(&cause.to_string());
+///         source = cause.source();
+///     }
+///     text
+/// }
+/// ```
+///
+/// The `reqwest::Error` in that chain prints the request URL, query
+/// string included; keep that in mind if your URLs carry secrets.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {

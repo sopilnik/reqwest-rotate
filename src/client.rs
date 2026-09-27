@@ -741,6 +741,10 @@ impl RotatingClientBuilder {
     /// `reqwest::Client` picks up are ignored. Pass them explicitly if you
     /// want them.
     ///
+    /// Credentials for an `http://` proxy (as HTTP Basic authentication) or
+    /// a SOCKS proxy are sent to it unencrypted; use an `https://` proxy if
+    /// the path to it is not trusted.
+    ///
     /// Each proxy gets its own underlying `reqwest::Client`, built eagerly
     /// with its own connection pool and TLS configuration.
     ///
@@ -904,13 +908,16 @@ impl RotatingClientBuilder {
     /// Applies your own settings to every underlying
     /// [`reqwest::ClientBuilder`] (one direct client plus one per proxy):
     /// default headers, redirect policy, TLS options, and so on. Runs after
-    /// this builder's own settings, so it can override them. A `.retry(..)`
-    /// call in here overrides the crate's own `retry(never())`, bringing
-    /// reqwest's layer back and letting attempts multiply past what
-    /// [`retries`](Self::retries) counts. A header added here through
-    /// `default_headers` shows up in `Debug` output exactly as it would on
-    /// a plain `reqwest::Client`; mark its `HeaderValue` sensitive with
-    /// `set_sensitive(true)` if it should not.
+    /// this builder's own settings, so it can override them. That includes
+    /// TLS: a `danger_accept_invalid_certs(true)` here turns off certificate
+    /// checks on every request, through every proxy, which is where a man
+    /// in the middle is most likely. A `.retry(..)` call in here overrides
+    /// the crate's own `retry(never())`, bringing reqwest's layer back and
+    /// letting attempts multiply past what [`retries`](Self::retries)
+    /// counts. A header added here through `default_headers` shows up in
+    /// `Debug` output exactly as it would on a plain `reqwest::Client`;
+    /// mark its `HeaderValue` sensitive with `set_sensitive(true)` if it
+    /// should not.
     ///
     /// Anything behind a `reqwest` cargo feature (`gzip`, `brotli`,
     /// `cookies`, ...) needs that feature enabled on *your* `reqwest`
@@ -1010,7 +1017,7 @@ impl RotatingClientBuilder {
             match proxy_url {
                 Some(proxy_url) => {
                     // ProxyList::new already ran this same string through
-                    // normalize_proxy_url, so this map_err is unreachable
+                    // canonical_proxy_url, so this map_err is unreachable
                     // today; kept in case a future reqwest release tightens
                     // its own proxy URL parsing past ours.
                     let proxy = reqwest::Proxy::all(proxy_url).map_err(|e| {

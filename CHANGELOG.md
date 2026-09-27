@@ -25,13 +25,9 @@ and this project uses [Semantic Versioning](https://semver.org/).
   ignored and the limited proxy is not put in cooldown. Once every
   healthy proxy has answered `429` to a call, the usual
   `Retry-After`/backoff path applies. Off by default.
-- `RotatingClientBuilder::on_retry`. Runs a callback before each retry
-  with the attempt number, why it failed, the proxy in use (redacted
-  the same way as `tracing` output) and the coming delay, for counters
-  and metrics that do not want a tracing subscriber. `RetryEvent` and
-  `RetryReason` are `#[non_exhaustive]`, so more fields and variants
-  can be added later without a breaking change. `RetryReason` also
-  implements `Hash` and `Ord`, so it can key a map.
+- `RotatingClientBuilder::on_retry`: a callback before each retry
+  with the attempt, the reason, the (redacted) proxy and the delay.
+  Handy for metrics without a tracing subscriber.
 - Three runnable examples under `examples/`: `get` fetches one URL
   with retries and backoff, `proxy_pool` rotates across proxies read
   from `PROXIES` and reports their cooldown state, and `retry_metrics`
@@ -89,23 +85,19 @@ and this project uses [Semantic Versioning](https://semver.org/).
 - Requests queued for a rate-limited host now leave the configured
   interval apart even when a busy runtime wakes them late. Before,
   every overdue request for that host went out in the same tick.
-- The crate documentation on docs.rs is now generated from
-  `README.md` instead of a separate copy in `src/lib.rs`, so there
-  is one copy of it to keep current instead of two that had already
-  drifted apart.
+- The docs.rs front page is now `README.md`.
 - docs.rs now marks `RequestBuilder::query`, `form`, `json` and
   `multipart` with the feature each one needs.
-- Minimum dependency versions raised to what the rest of the
-  dependency graph already requires, so `Cargo.toml` no longer
-  allows releases that cannot be resolved together: `http` 1.1,
-  `hyper` 1.6.0, `h2` 0.4.2 and `tracing` 0.1.35 (reqwest 0.13 and
-  its HTTP stack), `serde` 1.0.220 (the first release that shares
-  its traits with current `serde_json`), `thiserror` 2.0.3 and
-  `tokio` 1.28.1 (reqwest's optional HTTP/3 dependency `quinn`,
-  which Cargo resolves even though this crate never enables it).
+- Minimum dependency versions raised to ones that actually resolve
+  together with reqwest 0.13: `http` 1.1, `hyper` 1.6.0, `h2` 0.4.2,
+  `tracing` 0.1.35, `serde` 1.0.220, `thiserror` 2.0.3, `tokio`
+  1.28.1.
 - `Error::InvalidProxy`'s own message no longer repeats its reason;
   read the reason from `source()`, as for the other variants, so a
   chain-walking reporter such as `anyhow`'s `{:#}` prints it once.
+- `ProxyList::in_cooldown` is now `#[must_use]`, like the other queries
+  on `ProxyList`.
+- The minimum supported Rust version stays 1.85.
 
 ### Fixed
 
@@ -161,6 +153,8 @@ and this project uses [Semantic Versioning](https://semver.org/).
 - If you print `Error::InvalidProxy` with `{}` and want to see why
   the proxy was rejected, print its `source()` too, or use a reporter
   that walks the chain, such as `anyhow`'s `{:#}`.
+- With `native-tls`, HTTPS now uses HTTP/2 when the server offers it.
+  To stay on HTTP/1.1, call `configure(|b| b.http1_only())`.
 
 ## [0.1.1] - 2026-09-16
 

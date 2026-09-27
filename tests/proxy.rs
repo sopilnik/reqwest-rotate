@@ -82,8 +82,8 @@ async fn send_takes_a_builder_from_another_reqwest_client() {
 
 #[tokio::test]
 async fn connect_failure_marks_proxy_bad() {
-    // Ports 1 and 2 are reserved TCP ports that nothing listens on, so a
-    // connect attempt fails immediately instead of timing out for real.
+    // Ports 1 and 2: nothing listens, so the connect fails at once, not by
+    // timing out for real.
     let bad_proxy = "http://127.0.0.1:1";
     let good_proxy = "http://127.0.0.1:2";
 
@@ -295,8 +295,8 @@ async fn switch_proxy_on_429_goes_to_the_next_proxy_at_once() {
         .proxies([limited.as_str(), other.as_str()])
         .retries(1)
         .switch_proxy_on_429(true)
-        // A large backoff: switching proxies must not wait for it, and the
-        // Retry-After above is far larger still.
+        // Only the switch can finish inside the 2 s timeout below: the
+        // backoff and the Retry-After above are both far longer.
         .backoff(Duration::from_secs(60), Duration::from_secs(60))
         .max_retry_after(Duration::from_secs(60))
         .build()
