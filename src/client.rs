@@ -286,6 +286,12 @@ impl RotatingClient {
                 proxy_idx.map(|idx| inner.proxies.redacted(idx))
             );
             let plain_http = current.url().scheme() == "http";
+            // Only an on_retry hook reads it: no allocation without one.
+            let host = inner
+                .on_retry
+                .as_ref()
+                .and(current.url().host_str())
+                .map(str::to_owned);
 
             match client.execute(current).await {
                 Ok(response) => {
@@ -356,6 +362,7 @@ impl RotatingClient {
                                 RetryReason::Status(status)
                             },
                             proxy: proxy_idx.map(|idx| inner.proxies.redacted(idx)),
+                            host,
                             delay,
                         });
                     }
@@ -394,6 +401,7 @@ impl RotatingClient {
                             attempt,
                             reason: retry_reason(&err),
                             proxy: proxy_idx.map(|idx| inner.proxies.redacted(idx)),
+                            host,
                             delay,
                         });
                     }

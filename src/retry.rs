@@ -177,6 +177,10 @@ pub struct RetryEvent {
     /// The proxy that carried the failed attempt, with any
     /// `user:password@` replaced by `***@`. `None` for a direct request.
     pub proxy: Option<String>,
+    /// The host the failed attempt was sent to. `None` only if the request
+    /// URL somehow carries no host, which a client built by this crate
+    /// never sends.
+    pub host: Option<String>,
     /// The backoff the client sleeps before the next attempt; the rate
     /// limiter may add its own wait on top. Zero when the next attempt goes
     /// through another proxy without waiting, and possible under full
@@ -187,7 +191,9 @@ pub struct RetryEvent {
 /// Why an attempt is being retried.
 ///
 /// More variants may be added later, so this cannot be matched exhaustively
-/// outside the crate.
+/// outside the crate. The derived `Ord` follows declaration order; new
+/// variants are only ever added at the end, so an existing order does not
+/// change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum RetryReason {
@@ -210,6 +216,22 @@ pub enum RetryReason {
     /// Any other transport failure after the request was sent, retried
     /// only for idempotent requests.
     Transport,
+}
+
+impl RetryReason {
+    /// A short, stable name for metric labels: `status`, `proxy_status`,
+    /// `timeout`, `connect`, `never_sent` or `transport`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Status(_) => "status",
+            Self::ProxyStatus(_) => "proxy_status",
+            Self::Timeout => "timeout",
+            Self::Connect => "connect",
+            Self::NeverSent => "never_sent",
+            Self::Transport => "transport",
+        }
+    }
 }
 
 /// Classifies an error already accepted by [`should_retry_error`] into the
@@ -377,6 +399,30 @@ mod tests {
             "http",
             "http://p/"
         ));
+    }
+
+    #[test]
+    fn as_str_covers_every_variant() {
+        // The closure lists every variant with no wildcard arm, so a new
+        // variant fails to compile here until this test names it and gives
+        // it a label assertion below.
+        let label = |reason: RetryReason| match reason {
+            RetryReason::Status(_)
+            | RetryReason::ProxyStatus(_)
+            | RetryReason::Timeout
+            | RetryReason::Connect
+            | RetryReason::NeverSent
+            | RetryReason::Transport => reason.as_str(),
+        };
+        assert_eq!(label(RetryReason::Status(StatusCode::OK)), "status");
+        assert_eq!(
+            label(RetryReason::ProxyStatus(StatusCode::OK)),
+            "proxy_status"
+        );
+        assert_eq!(label(RetryReason::Timeout), "timeout");
+        assert_eq!(label(RetryReason::Connect), "connect");
+        assert_eq!(label(RetryReason::NeverSent), "never_sent");
+        assert_eq!(label(RetryReason::Transport), "transport");
     }
 
     #[test]

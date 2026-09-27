@@ -40,6 +40,12 @@ and this project uses [Semantic Versioning](https://semver.org/).
   `user:password@` replaced by `***@`, the same redaction `Debug`
   output and `tracing` events use, so a caller no longer has to strip
   credentials by hand before logging or printing one.
+- `RetryReason::as_str`. A short, stable label (`status`,
+  `proxy_status`, `timeout`, `connect`, `never_sent`, `transport`)
+  for metrics, in place of formatting the `Debug` output by hand.
+- `RetryEvent::host`. The host the failed attempt was sent to, so a
+  per-host retry count no longer needs the request URL threaded
+  through some other way.
 
 ### Changed
 

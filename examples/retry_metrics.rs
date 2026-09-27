@@ -1,10 +1,12 @@
 //! Counts retries by reason using the `on_retry` hook, with no `tracing`
-//! subscriber involved. Run with `cargo run --example retry_metrics -- <url>`.
+//! subscriber involved. Each event also carries the host the failed
+//! attempt was sent to (`event.host`), left out of this table to keep it
+//! short. Run with `cargo run --example retry_metrics -- <url>`.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use reqwest_rotate::{RetryReason, RotatingClient};
+use reqwest_rotate::RotatingClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -13,13 +15,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     };
 
-    let counts = Arc::new(Mutex::new(BTreeMap::<RetryReason, usize>::new()));
+    let counts = Arc::new(Mutex::new(BTreeMap::<&'static str, usize>::new()));
     let counted = Arc::clone(&counts);
 
     let client = RotatingClient::builder()
         .retries(3)
         .on_retry(move |event| {
-            *counted.lock().unwrap().entry(event.reason).or_insert(0) += 1;
+            *counted
+                .lock()
+                .unwrap()
+                .entry(event.reason.as_str())
+                .or_insert(0) += 1;
         })
         .build()?;
 
@@ -31,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("no retries");
         }
         for (reason, count) in counts.iter() {
-            println!("{reason:?}: {count}");
+            println!("{reason}: {count}");
         }
     }
 

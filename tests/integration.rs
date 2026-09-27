@@ -2189,6 +2189,7 @@ async fn on_retry_reports_each_retried_status() {
             RetryReason::Status(StatusCode::SERVICE_UNAVAILABLE)
         );
         assert_eq!(event.proxy, None);
+        assert_eq!(event.host.as_deref(), Some("127.0.0.1"));
         assert!(
             event.delay <= Duration::from_millis(20),
             "{:?}",
@@ -2315,6 +2316,7 @@ async fn on_retry_names_the_transport_failure() {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].reason, RetryReason::Transport);
         assert_eq!(events[0].proxy, None);
+        assert_eq!(events[0].host.as_deref(), Some("127.0.0.1"));
     }
 
     let (good_proxy, good_seen) = raw_server(0, OK_RESPONSE).await;
@@ -2334,6 +2336,7 @@ async fn on_retry_names_the_transport_failure() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].reason, RetryReason::Connect);
     assert_eq!(events[0].proxy.as_deref(), Some("http://***@127.0.0.1:1/"));
+    assert_eq!(events[0].host.as_deref(), Some("example.invalid"));
 }
 
 #[tokio::test]
