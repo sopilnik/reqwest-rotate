@@ -34,11 +34,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let result = client.get(&url).await;
 
-    for proxy in client.proxies().iter() {
-        // The list keeps credentials so it can connect; keep them off the screen.
-        let mut shown = reqwest::Url::parse(proxy)?;
-        let _ = shown.set_username("");
-        let _ = shown.set_password(None);
+    for (proxy, shown) in client
+        .proxies()
+        .iter()
+        .zip(client.proxies().iter_redacted())
+    {
         println!(
             "{shown} in_cooldown={}",
             client.proxies().in_cooldown(proxy)

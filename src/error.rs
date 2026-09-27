@@ -10,12 +10,10 @@ use thiserror::Error;
 /// Use [`Response::error_for_status`](reqwest::Response::error_for_status)
 /// if you want a non-2xx status to become an error.
 ///
-/// Where a variant wraps a `reqwest::Error`, that error is this one's
-/// [`source`](std::error::Error::source); [`Reqwest`](Error::Reqwest) and
-/// [`Build`](Error::Build) do not repeat it in their own message.
-/// [`InvalidProxy`](Error::InvalidProxy) is the exception: its message
-/// includes the reason for readability even though the same text is also
-/// reachable through `source`.
+/// Where a variant wraps a `reqwest::Error`, or a plain-text reason, that
+/// is this one's [`source`](std::error::Error::source), and no variant's
+/// own message repeats it: walking the chain with a reporter such as
+/// `anyhow`'s `{:#}` prints the reason exactly once.
 ///
 /// Marked `#[non_exhaustive]`: new variants may be added in a minor release
 /// without that counting as a breaking change.
@@ -37,7 +35,7 @@ pub enum Error {
     /// [`source`](std::error::Error::source) carries the reason: either a
     /// plain-text explanation with no cause of its own, or the
     /// `reqwest::Error` from the failed client build.
-    #[error("invalid proxy: {proxy}: {source}")]
+    #[error("invalid proxy: {proxy}")]
     InvalidProxy {
         /// The proxy URL as far as it could be read, or the caller's own
         /// spelling if it could not be parsed at all. Credentials are
@@ -102,10 +100,10 @@ mod tests {
     #[test]
     fn invalid_proxy_keeps_its_source() {
         let err = Error::invalid_proxy("http://proxy.example", "not a valid proxy URL");
-        assert!(std::error::Error::source(&err).is_some());
+        assert_eq!(err.to_string(), "invalid proxy: http://proxy.example");
         assert_eq!(
-            err.to_string(),
-            "invalid proxy: http://proxy.example: not a valid proxy URL"
+            std::error::Error::source(&err).unwrap().to_string(),
+            "not a valid proxy URL"
         );
     }
 }

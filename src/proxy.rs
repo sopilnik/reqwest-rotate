@@ -111,14 +111,30 @@ impl ProxyList {
 
     /// All configured proxy URLs, canonicalised, in rotation order.
     /// Prefer [`iter`](Self::iter); this stays available until 1.0.
+    ///
+    /// The URLs keep any `user:password@`, since that is what the client
+    /// connects with; strip it before you log or print one, or use
+    /// [`iter_redacted`](Self::iter_redacted) instead.
     #[must_use]
     pub fn as_slice(&self) -> &[String] {
         &self.proxies
     }
 
     /// All configured proxy URLs, canonicalised, in rotation order.
+    ///
+    /// The URLs keep any `user:password@`, since that is what the client
+    /// connects with; strip it before you log or print one, or use
+    /// [`iter_redacted`](Self::iter_redacted) instead.
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &str> + ExactSizeIterator {
         self.proxies.iter().map(String::as_str)
+    }
+
+    /// All configured proxy URLs, canonicalised and in rotation order, with
+    /// any `user:password@` replaced by `***@`: the same redaction
+    /// [`Debug`](std::fmt::Debug) output and `tracing` events use, safe to
+    /// log or print directly.
+    pub fn iter_redacted(&self) -> impl Iterator<Item = String> + '_ {
+        self.proxies.iter().map(|p| redact_userinfo(p))
     }
 
     /// Index of `proxy`, accepting either the canonical form or anything
@@ -147,6 +163,9 @@ impl ProxyList {
     /// list is taken out of cooldown at once; the others stay marked until
     /// their own cooldown expires or [`mark_good`](Self::mark_good) clears
     /// it.
+    ///
+    /// The URL keeps any `user:password@`, since it is what the client
+    /// connects with; strip it before you log or print it.
     pub fn pick(&self) -> Option<&str> {
         self.pick_index().map(|idx| self.proxies[idx].as_str())
     }
@@ -361,9 +380,28 @@ pub(crate) fn redact_userinfo(url: &str) -> String {
 /// credentials.
 fn redact_unparsable(raw: &str) -> String {
     let Some(at) = raw.rfind('@') else {
-        return raw.to_string();
+        // No `@`, but a password can still be in there: the
+        // `host:port:user:pass` export many proxy vendors use. Keep the
+        // scheme and host, hide everything after them.
+        let (prefix, rest) = match raw.find("://") {
+            Some(p) => raw.split_at(p + 3),
+            None => ("", raw),
+        };
+        return match rest.split_once(':') {
+            Some((host, _)) => format!("{prefix}{host}:***"),
+            None => raw.to_string(),
+        };
     };
     let tail = &raw[at + 1..];
+    // `host:port@user:pass`, as some vendors write it: what follows the
+    // last `@` is then no host and port, so anything after its first `:`
+    // that is not a port number is hidden too.
+    let tail = match tail.split_once(':') {
+        Some((host, port)) if !port.bytes().all(|b| b.is_ascii_digit()) => {
+            format!("{host}:***")
+        }
+        _ => tail.to_string(),
+    };
     let prefix = raw
         .find("://")
         .filter(|p| *p < at)
@@ -380,7 +418,10 @@ fn redact_unparsable(raw: &str) -> String {
 fn normalize_proxy_url(raw: &str) -> Result<String, Error> {
     let raw = raw.trim();
     if raw.is_empty() {
-        return Err(Error::invalid_proxy(String::new(), "proxy URL is empty"));
+        return Err(Error::invalid_proxy(
+            "(blank entry)",
+            "proxy URL is empty; drop blank lines from the list",
+        ));
     }
 
     // An explicit `scheme://` is taken at face value (and its scheme
@@ -405,7 +446,18 @@ fn normalize_proxy_url(raw: &str) -> Result<String, Error> {
         .filter(reqwest::Url::has_host)
         .ok_or_else(|| {
             let unparsable = redact_unparsable(raw);
-            Error::invalid_proxy(unparsable, "not a valid proxy URL")
+            let vendor_spelling = !has_scheme
+                && !raw.contains('@')
+                && raw.matches(':').count() == 3
+                && raw.split(':').nth(1).is_some_and(|port| {
+                    !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
+                });
+            let reason = if vendor_spelling {
+                "not a valid proxy URL; write `host:port:user:pass` as `http://user:pass@host:port`"
+            } else {
+                "not a valid proxy URL"
+            };
+            Error::invalid_proxy(unparsable, reason)
         })?;
 
     check_scheme(url.scheme(), &shown)?;
@@ -461,6 +513,22 @@ mod tests {
     fn rejects_blank_proxy_entries() {
         let err = ProxyList::new(["  "]).unwrap_err();
         assert!(matches!(err, Error::InvalidProxy { .. }));
+    }
+
+    #[test]
+    fn vendor_colon_format_is_explained_and_redacted() {
+        let err = ProxyList::new(["1.2.3.4:8080:user:s3cret"]).unwrap_err();
+        let message = err.to_string();
+        let reason = std::error::Error::source(&err).unwrap().to_string();
+        assert!(!message.contains("s3cret"), "{message}");
+        assert!(!message.contains("user"), "{message}");
+        assert!(!reason.contains("s3cret"), "{reason}");
+        assert!(reason.contains("http://user:pass@host:port"), "{reason}");
+
+        let at_spelling = ProxyList::new(["1.2.3.4:8080@user:s3cret"])
+            .unwrap_err()
+            .to_string();
+        assert!(!at_spelling.contains("s3cret"), "{at_spelling}");
     }
 
     #[test]
@@ -524,6 +592,13 @@ mod tests {
             reversed,
             &["http://proxy-b.example:8080/", "http://proxy.example/"]
         );
+    }
+
+    #[test]
+    fn iter_redacted_hides_credentials_in_rotation_order() {
+        let list = list(&["http://alice:s3cret@a:8080", "b:3128"]);
+        let shown: Vec<String> = list.iter_redacted().collect();
+        assert_eq!(shown, ["http://***@a:8080/", "http://b:3128/"]);
     }
 
     #[cfg(not(feature = "socks"))]
@@ -722,7 +797,9 @@ mod tests {
         assert_eq!(redact_unparsable("a@b@c"), "***@c");
         assert_eq!(redact_unparsable("nope"), "nope");
         assert_eq!(redact_unparsable("http://"), "http://");
-        assert_eq!(redact_unparsable("user@host://x"), "***@host://x");
+        // The port-shaped check catches this one too: "//x" is not a
+        // port, so it is hidden the same way as a real `host:port@user:pass`.
+        assert_eq!(redact_unparsable("user@host://x"), "***@host:***");
     }
 
     #[test]
@@ -740,10 +817,7 @@ mod tests {
         let schemeless = ProxyList::new(["not a valid proxy url"])
             .unwrap_err()
             .to_string();
-        assert!(
-            schemeless.starts_with("invalid proxy: not a valid proxy url:"),
-            "{schemeless}"
-        );
+        assert_eq!(schemeless, "invalid proxy: not a valid proxy url");
 
         let schemeless_with_credentials = ProxyList::new(["user:s3cret@not a url"])
             .unwrap_err()
@@ -785,27 +859,26 @@ mod tests {
         // parse; the authority boundary is then unknown, so the whole
         // spelling up to the last `@` must be redacted, not just the part
         // `redact_userinfo` would have guessed at.
-        let slash_in_password = ProxyList::new(["http://user:p?ss@host:3128"])
-            .unwrap_err()
-            .to_string();
+        let slash_in_password_err = ProxyList::new(["http://user:p?ss@host:3128"]).unwrap_err();
+        let slash_in_password = slash_in_password_err.to_string();
         assert!(!slash_in_password.contains("p?ss"), "{slash_in_password}");
+        assert_eq!(slash_in_password, "invalid proxy: http://***@host:3128");
         assert_eq!(
-            slash_in_password,
-            "invalid proxy: http://***@host:3128: not a valid proxy URL"
+            std::error::Error::source(&slash_in_password_err)
+                .unwrap()
+                .to_string(),
+            "not a valid proxy URL"
         );
 
         let hash_in_password = ProxyList::new(["user:p#ss@host:3128"])
             .unwrap_err()
             .to_string();
         assert!(!hash_in_password.contains("p#ss"), "{hash_in_password}");
-        assert!(hash_in_password.contains("***@host:3128: not a valid proxy URL"));
+        assert!(hash_in_password.contains("***@host:3128"));
 
         // Guard: input with no `@` at all is unaffected by the redaction
         // change, before or after.
         let no_credentials = ProxyList::new(["http://"]).unwrap_err().to_string();
-        assert_eq!(
-            no_credentials,
-            "invalid proxy: http://: not a valid proxy URL"
-        );
+        assert_eq!(no_credentials, "invalid proxy: http://");
     }
 }

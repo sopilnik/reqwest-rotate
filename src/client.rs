@@ -1174,7 +1174,11 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn drain_gives_up_on_a_stalled_body_at_its_time_limit() {
         let start = tokio::time::Instant::now();
-        drain(stalled_response(reqwest::Version::HTTP_11), DRAIN_TIME_FLOOR).await;
+        drain(
+            stalled_response(reqwest::Version::HTTP_11),
+            DRAIN_TIME_FLOOR,
+        )
+        .await;
         assert_eq!(start.elapsed(), DRAIN_TIME_FLOOR);
     }
 

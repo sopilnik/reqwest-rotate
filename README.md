@@ -86,14 +86,16 @@ which also puts the proxy on cooldown and is retried for every request.
 
 Only the proxies you configure are used. `HTTP_PROXY` and friends are ignored.
 `http://`, `https://` and bare `host:port` (treated as `http://host:port`) work out
-of the box. `socks5://` and friends need the `socks` feature; without it they are
-rejected when the client is built, not silently on every request. Proxy credentials
-never reach `Debug` output, error messages, `tracing` events, or the `proxy` field
-of an `on_retry` event, and logged URLs drop their query string, so a token passed as
-a query parameter stays out of the log too. A header you add yourself through
-`configure(|b| b.default_headers(..))` is not redacted this way: it shows up in
-`Debug` output exactly as it would on a plain `reqwest::Client`. Mark its
-`HeaderValue` sensitive with `set_sensitive(true)` if it needs to be.
+of the box. A `host:port:user:pass` line, as many proxy vendors export it, is
+rejected; write it as `http://user:pass@host:port`. `socks5://` and friends need the
+`socks` feature; without it they are rejected when the client is built, not silently
+on every request. Proxy credentials never reach `Debug` output, error messages,
+`tracing` events, or the `proxy` field of an `on_retry` event, and logged URLs drop
+their query string, so a token passed as a query parameter stays out of the log
+too. A header you add yourself through `configure(|b| b.default_headers(..))` is not
+redacted this way: it shows up in `Debug` output exactly as it would on a plain
+`reqwest::Client`. Mark its `HeaderValue` sensitive with `set_sensitive(true)` if it
+needs to be.
 
 **Per-host rate limiting.** A minimum interval between requests to the same host
 name; port and scheme are not part of the key, so `http://` and `https://` traffic

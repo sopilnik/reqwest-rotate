@@ -36,6 +36,10 @@ and this project uses [Semantic Versioning](https://semver.org/).
   with retries and backoff, `proxy_pool` rotates across proxies read
   from `PROXIES` and reports their cooldown state, and `retry_metrics`
   counts retries by reason with `on_retry`.
+- `ProxyList::iter_redacted`. Yields the configured proxies with any
+  `user:password@` replaced by `***@`, the same redaction `Debug`
+  output and `tracing` events use, so a caller no longer has to strip
+  credentials by hand before logging or printing one.
 
 ### Changed
 
@@ -93,6 +97,9 @@ and this project uses [Semantic Versioning](https://semver.org/).
   its traits with current `serde_json`), `thiserror` 2.0.3 and
   `tokio` 1.28.1 (reqwest's optional HTTP/3 dependency `quinn`,
   which Cargo resolves even though this crate never enables it).
+- `Error::InvalidProxy`'s own message no longer repeats its reason;
+  read the reason from `source()`, as for the other variants, so a
+  chain-walking reporter such as `anyhow`'s `{:#}` prints it once.
 
 ### Fixed
 
@@ -106,6 +113,11 @@ and this project uses [Semantic Versioning](https://semver.org/).
   `GOAWAY(NO_ERROR)` up to twice under each attempt, and replay a
   `POST` with a clonable body by its own rules instead of this
   crate's.
+- A `host:port:user:pass` proxy line, as many vendors export it, is
+  now rejected with a reason naming the accepted spelling instead of
+  a bare "not a valid proxy URL", and without its password in the
+  error. A blank entry now names itself instead of leaving the proxy
+  field empty.
 - A `407` reaching the client through a `CONNECT` tunnel or a SOCKS
   proxy is now treated as the origin's own answer, not the proxy's:
   only a proxy that forwards a plain `http://` request itself can
@@ -130,6 +142,9 @@ and this project uses [Semantic Versioning](https://semver.org/).
 - A `Retry-After` shorter than the computed backoff, `0` included, no
   longer cuts the wait short. Nothing to change unless a test of yours
   timed a `Retry-After: 0` retry.
+- If you print `Error::InvalidProxy` with `{}` and want to see why
+  the proxy was rejected, print its `source()` too, or use a reporter
+  that walks the chain, such as `anyhow`'s `{:#}`.
 
 ## [0.1.1] - 2026-09-16
 
