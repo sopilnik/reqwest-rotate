@@ -172,6 +172,26 @@ async fn last_response_is_returned_when_retries_run_out() {
     assert_eq!(response.text().await.unwrap(), "try later");
 }
 
+#[tokio::test]
+async fn zero_retries_returns_retryable_response_after_one_attempt() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/no-retries"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("try later"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = quick().retries(0).build().unwrap();
+    let response = client
+        .get(format!("{}/no-retries", server.uri()))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 503);
+    assert_eq!(response.text().await.unwrap(), "try later");
+}
+
 /// Body size for [`keep_alive_503_server`]: below the client's drain
 /// budget, but well above what `hyper` buffers along with the headers, so
 /// a body that is *not* drained really does cost the connection.
