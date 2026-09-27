@@ -8,7 +8,7 @@ If you want to change behavior or the public API, open an issue first so we can 
 
 ## Making a change
 
-- Add a test for any behavior change or bug fix. Integration tests go in `tests/`; unit tests go next to the code in `src/`.
+- Add a test for any behavior change or bug fix. Integration tests go in the file for their topic (`tests/retry.rs`, `retry_after.rs`, `rate_limit.rs`, `proxy.rs`, `request_builder.rs`, `on_retry.rs`, `builder.rs`), with shared helpers in `tests/common/mod.rs`; unit tests go next to the code in `src/`.
 - Public items need doc comments. CI fails without them.
 - The crate docs on docs.rs are `README.md`; its `rust` example runs as a doctest, so keep it compiling.
 - The crate has `#![forbid(unsafe_code)]`, and I plan to keep it.

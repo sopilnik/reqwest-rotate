@@ -652,10 +652,7 @@ mod tests {
 
     #[test]
     fn dedup_holds_at_scale() {
-        // Every second entry repeats the one before it, so 2000 inputs
-        // collapse to 1000 distinct proxies. This exercises dedup at a size
-        // the other tests never reach; it is a correctness check, not a
-        // benchmark (no timing assertion here).
+        // 2000 inputs, every second one a repeat: 1000 left, first-seen order.
         let proxies: Vec<String> = (0..2000)
             .map(|i| format!("http://10.0.0.{}:{}", i / 2 % 256, 9000 + i / 2))
             .collect();
@@ -907,8 +904,7 @@ mod tests {
         assert!(!hash_in_password.contains("p#ss"), "{hash_in_password}");
         assert!(hash_in_password.contains("***@host:3128"));
 
-        // Guard: input with no `@` at all is unaffected by the redaction
-        // change, before or after.
+        // No `@` at all: nothing to redact.
         let no_credentials = ProxyList::new(["http://"]).unwrap_err().to_string();
         assert_eq!(no_credentials, "invalid proxy: http://");
     }

@@ -1137,13 +1137,8 @@ mod tests {
         assert!(debug.contains(r#"configure: Some("<fn>")"#), "{debug}");
     }
 
-    /// `builder_debug_hides_credentials` above only covers the *builder*.
-    /// The struct a user actually holds onto and might log is
-    /// `RotatingClient` itself, whose `Debug` prints the built
-    /// `reqwest::Client`s: today the secret stays out only because
-    /// reqwest's own `Debug` happens to print a proxy's URI without its
-    /// userinfo. This pins that behaviour so a future reqwest release
-    /// changing it would fail this test instead of leaking silently.
+    /// reqwest's own `Debug` leaves a proxy's userinfo out today. If a
+    /// release ever stops doing that, this fails.
     #[test]
     fn client_debug_hides_proxy_credentials() {
         let client = RotatingClient::builder()
@@ -1187,11 +1182,8 @@ mod tests {
 
     #[test]
     fn proxies_accepts_a_slice_of_str_refs() {
-        // Compiling is the test: a caller who reads proxies into a
-        // `Vec<&str>` and passes `&proxies` (keeping ownership of the
-        // `Vec` for later use) used to hit `String: From<&&str>` is not
-        // satisfied, even though the equivalent `ProxyList::new(&proxies)`
-        // already accepted this shape via `AsRef<str>`.
+        // Compiling is the test: `&Vec<&str>` must be accepted, as
+        // `ProxyList::new` accepts it.
         let proxies: Vec<&str> = vec!["http://a", "http://b"];
         let client = RotatingClient::builder().proxies(&proxies).build().unwrap();
         assert_eq!(client.proxies().len(), 2);
