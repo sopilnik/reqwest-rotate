@@ -322,50 +322,23 @@ impl RotatingClient {
                         return Ok(response);
                     }
 
-                    let delay = if let Some(idx) = blamed_proxy {
-                        switch_delay(inner, attempt, idx, &limited)
-                    } else if inner.switch_proxy_on_429
-                        && status == StatusCode::TOO_MANY_REQUESTS
-                        && proxy_idx.is_some_and(|idx| {
-                            if !limited.contains(&idx) {
-                                limited.push(idx);
-                            }
-                            inner.proxies.any_healthy_outside(&limited)
-                        })
-                    {
-                        trace_log!(
-                            "proxy {} answered 429: switching to another proxy without waiting",
-                            inner.proxies.redacted(proxy_idx.expect("checked above"))
-                        );
-                        Duration::ZERO
-                    } else {
-                        let asked = retry_after(response.headers());
-                        match asked {
-                            Some(asked) if asked > inner.max_retry_after => {
-                                trace_log!(
-                                    "server asked to wait {asked:?}, above max_retry_after: returning {status}"
-                                );
-                                return Ok(response);
-                            }
-                            _ => response_delay(
-                                asked,
-                                backoff_delay(attempt, inner.backoff_base, inner.backoff_max),
-                            ),
-                        }
+                    let Some(delay) = status_delay(
+                        inner,
+                        attempt,
+                        status,
+                        proxy_idx,
+                        blamed_proxy,
+                        &mut limited,
+                        response.headers(),
+                    ) else {
+                        return Ok(response);
                     };
-                    if let Some(hook) = &inner.on_retry {
-                        hook(&RetryEvent {
-                            attempt,
-                            reason: if blamed_proxy.is_some() {
-                                RetryReason::ProxyStatus(status)
-                            } else {
-                                RetryReason::Status(status)
-                            },
-                            proxy: proxy_idx.map(|idx| inner.proxies.redacted(idx)),
-                            host,
-                            delay,
-                        });
-                    }
+                    let reason = if blamed_proxy.is_some() {
+                        RetryReason::ProxyStatus(status)
+                    } else {
+                        RetryReason::Status(status)
+                    };
+                    notify_retry(inner, attempt, reason, proxy_idx, host, delay);
                     trace_log!("retrying after {delay:?}, status={status}");
                     // `delay` is at most `MAX_DURATION`, so this cannot overflow.
                     let wake = tokio::time::Instant::now() + delay;
@@ -396,15 +369,7 @@ impl RotatingClient {
                     } else {
                         backoff_delay(attempt, inner.backoff_base, inner.backoff_max)
                     };
-                    if let Some(hook) = &inner.on_retry {
-                        hook(&RetryEvent {
-                            attempt,
-                            reason: retry_reason(&err),
-                            proxy: proxy_idx.map(|idx| inner.proxies.redacted(idx)),
-                            host,
-                            delay,
-                        });
-                    }
+                    notify_retry(inner, attempt, retry_reason(&err), proxy_idx, host, delay);
                     trace_log!("retrying after {delay:?} ({} error)", error_kind(&err));
                     if !delay.is_zero() {
                         tokio::time::sleep(delay).await;
@@ -552,6 +517,71 @@ impl RequestBuilder {
     /// with no proxy; pass it to [`RotatingClient::send`] to get them back.
     pub fn into_inner(self) -> reqwest::RequestBuilder {
         self.inner
+    }
+}
+
+/// Delay before retrying a retryable `status`, or `None` when the
+/// server's `Retry-After` asks for more than `max_retry_after` and the
+/// response goes back to the caller instead. A `429` that switches
+/// proxies also adds this proxy to `limited`.
+fn status_delay(
+    inner: &Inner,
+    attempt: u32,
+    status: StatusCode,
+    proxy_idx: Option<usize>,
+    blamed_proxy: Option<usize>,
+    limited: &mut Vec<usize>,
+    headers: &reqwest::header::HeaderMap,
+) -> Option<Duration> {
+    if let Some(idx) = blamed_proxy {
+        return Some(switch_delay(inner, attempt, idx, limited));
+    }
+    let switch_from = proxy_idx.filter(|&idx| {
+        inner.switch_proxy_on_429 && status == StatusCode::TOO_MANY_REQUESTS && {
+            if !limited.contains(&idx) {
+                limited.push(idx);
+            }
+            inner.proxies.any_healthy_outside(limited)
+        }
+    });
+    if let Some(_idx) = switch_from {
+        trace_log!(
+            "proxy {} answered 429: switching to another proxy without waiting",
+            inner.proxies.redacted(_idx)
+        );
+        return Some(Duration::ZERO);
+    }
+    let asked = retry_after(headers);
+    match asked {
+        Some(asked) if asked > inner.max_retry_after => {
+            trace_log!("server asked to wait {asked:?}, above max_retry_after: returning {status}");
+            None
+        }
+        _ => Some(response_delay(
+            asked,
+            backoff_delay(attempt, inner.backoff_base, inner.backoff_max),
+        )),
+    }
+}
+
+/// Tells the `on_retry` hook, if any, about the retry that is about to
+/// happen.
+fn notify_retry(
+    inner: &Inner,
+    attempt: u32,
+    reason: RetryReason,
+    proxy_idx: Option<usize>,
+    host: Option<String>,
+    delay: Duration,
+) {
+    if let Some(hook) = &inner.on_retry {
+        hook(&RetryEvent {
+            attempt,
+            reason,
+            proxy: proxy_idx.map(|idx| inner.proxies.redacted(idx)),
+            host,
+            delay,
+        });
     }
 }
 
