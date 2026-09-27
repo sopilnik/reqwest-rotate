@@ -123,6 +123,11 @@ and this project uses [Semantic Versioning](https://semver.org/).
   returned instead of retrying early. Before, a value that large
   failed to parse and fell back to the backoff, as if the header had
   asked for nothing at all.
+- A request-body stream that fails on the caller's own side no longer
+  cools down the proxy that carried it. The source walk that decides
+  whether a proxy is to blame now stops at the first `hyper` error in
+  the chain instead of continuing past it to an `io::Error` from the
+  caller's own stream.
 - A `407` reaching the client through a `CONNECT` tunnel or a SOCKS
   proxy is now treated as the origin's own answer, not the proxy's:
   only a proxy that forwards a plain `http://` request itself can

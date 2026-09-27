@@ -847,9 +847,13 @@ async fn post_is_not_retried_on_500() {
 #[tokio::test]
 async fn streaming_body_is_sent_once_without_retries() {
     let server = MockServer::start().await;
+    // 503 is retryable for every method, so this exercises the line that
+    // stops a second attempt from running when the body cannot be
+    // replayed: a 500 would return on the first attempt anyway, POST not
+    // being idempotent, and would not catch a regression there.
     Mock::given(method("POST"))
         .and(path("/stream"))
-        .respond_with(ResponseTemplate::new(500))
+        .respond_with(ResponseTemplate::new(503))
         .expect(1)
         .mount(&server)
         .await;
@@ -866,7 +870,7 @@ async fn streaming_body_is_sent_once_without_retries() {
     // A body that cannot be replayed still goes out exactly once, and the
     // response comes back instead of an error.
     let response = request_builder.send().await.unwrap();
-    assert_eq!(response.status(), 500);
+    assert_eq!(response.status(), 503);
 }
 
 #[tokio::test]
@@ -1532,6 +1536,33 @@ async fn a_per_attempt_timeout_through_a_proxy_marks_it_bad() {
         "{err:?}"
     );
     assert!(client.proxies().in_cooldown(&slow_proxy));
+}
+
+/// A streaming request body that fails on the caller's own side, mid
+/// stream, must not cool down the proxy that carried it: the proxy never
+/// gets the chance to fail, since the request never finished leaving.
+#[tokio::test]
+async fn a_failing_request_body_does_not_blame_the_proxy() {
+    let proxy = slow_server(Duration::from_secs(5)).await;
+    let client = quick()
+        .proxies([proxy.as_str()])
+        .retries(0)
+        .build()
+        .unwrap();
+    let body = reqwest::Body::wrap_stream(futures_util::stream::iter([
+        Ok::<&'static [u8], std::io::Error>(b"first chunk"),
+        Err(std::io::Error::other("the caller's source failed")),
+    ]));
+
+    let err = client
+        .request(reqwest::Method::PUT, "http://example.invalid/upload")
+        .body(body)
+        .send()
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, Error::Reqwest(_)), "{err}");
+    assert!(!client.proxies().in_cooldown(&proxy));
 }
 
 #[tokio::test]

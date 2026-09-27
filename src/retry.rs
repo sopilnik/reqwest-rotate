@@ -109,16 +109,22 @@ pub(crate) fn is_transport_error(err: &reqwest::Error) -> bool {
     if !err.is_request() {
         return false;
     }
-    sources(err).any(|inner| {
-        // hyper wraps every HTTP/2 stream and connection error it does not
-        // treat as IO as its own non-user, non-parse error, so an h2 error
-        // never needs a downcast of its own here - the hyper branch has
-        // already matched by the time the chain reaches it.
-        inner
-            .downcast_ref::<hyper::Error>()
-            .is_some_and(|e| !e.is_user() && !e.is_parse())
-            || inner.downcast_ref::<std::io::Error>().is_some()
-    })
+    // The first hyper error in the chain decides: a user error, such as a
+    // request body stream that failed on the caller's side, is not the
+    // transport's fault even when an `io::Error` sits below it. hyper
+    // wraps every HTTP/2 stream and connection error it does not treat as
+    // IO as its own non-user, non-parse error, so an h2 error never needs
+    // a downcast of its own here - the hyper branch has already matched
+    // by the time the chain reaches it.
+    for inner in sources(err) {
+        if let Some(e) = inner.downcast_ref::<hyper::Error>() {
+            return !e.is_user() && !e.is_parse();
+        }
+        if inner.downcast_ref::<std::io::Error>().is_some() {
+            return true;
+        }
+    }
+    false
 }
 
 /// Returns `true` for a transport error that proves the server never acted
@@ -194,7 +200,8 @@ pub enum RetryReason {
     /// A per-attempt or connect timeout.
     Timeout,
     /// A connect failure: to the server on a direct request, to the proxy,
-    /// or through the proxy's `CONNECT` tunnel.
+    /// through the proxy's `CONNECT` tunnel, or in the TLS handshake on
+    /// top of any of these, a certificate that does not verify included.
     Connect,
     /// A failure that proves the server never acted on the request: a
     /// cancelled dispatch, an HTTP/2 `REFUSED_STREAM`, or an unprocessed

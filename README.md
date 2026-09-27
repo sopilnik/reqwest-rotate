@@ -84,6 +84,12 @@ get it back, and the proxy stays healthy. Against an `https://` target, a refuse
 `CONNECT` never shows up as that `407`: it surfaces as a connect error instead,
 which also puts the proxy on cooldown and is retried for every request.
 
+A failed TLS handshake with the origin is a connect failure too, a certificate that
+does not verify included: it is retried like one, and through a proxy it puts that
+proxy on cooldown, since a proxy that intercepts TLS fails in exactly this way. An
+origin with a broken certificate therefore uses up every attempt, and can cool down
+one proxy per attempt.
+
 Only the proxies you configure are used. `HTTP_PROXY` and friends are ignored.
 `http://`, `https://` and bare `host:port` (treated as `http://host:port`) work out
 of the box. A `host:port:user:pass` line, as many proxy vendors export it, is
