@@ -65,6 +65,11 @@ and this project uses [Semantic Versioning](https://semver.org/).
   ALPN and use it when the server agrees, as `rustls` already did:
   reqwest 0.13 folded its `native-tls-alpn` feature into
   `native-tls`. Before, `native-tls` stayed on HTTP/1.1.
+- The pre-retry body drain now runs inside the coming backoff instead
+  of before it, and gives up after that backoff or 250 ms, whichever
+  is longer. An error body that does not end in time now costs a
+  reconnect instead of stalling the retry, and a body that declares
+  more than 64 KiB, or arrives over HTTP/2, is no longer read at all.
 - The crate documentation on docs.rs is now generated from
   `README.md` instead of a separate copy in `src/lib.rs`, so there
   is one copy of it to keep current instead of two that had already

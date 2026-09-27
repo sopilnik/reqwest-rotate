@@ -296,6 +296,62 @@ async fn retry_drain_does_not_buffer_a_huge_error_body() {
     );
 }
 
+/// A server that answers the first request with `503` headers and one body
+/// byte of a declared 1024, then stalls; every later request gets `200`.
+/// Returns the base URL and when the second request arrived.
+async fn stalled_503_body_server() -> (String, Arc<Mutex<Option<std::time::Instant>>>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let second = Arc::new(Mutex::new(None));
+    let seen = Arc::clone(&second);
+    tokio::spawn(async move {
+        let mut first = true;
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let mut buf = [0u8; 4096];
+            let _ = socket.read(&mut buf).await;
+            if first {
+                first = false;
+                let _ = socket
+                    .write_all(b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 1024\r\n\r\nx")
+                    .await;
+                tokio::spawn(async move {
+                    // Keep the socket open, body unfinished, until the
+                    // test's runtime shuts down.
+                    let _socket = socket;
+                    std::future::pending::<()>().await;
+                });
+            } else {
+                *seen.lock().unwrap() = Some(std::time::Instant::now());
+                let _ = socket.write_all(OK_RESPONSE).await;
+            }
+        }
+    });
+    (url, second)
+}
+
+#[tokio::test]
+async fn a_stalled_error_body_does_not_hold_up_the_retry() {
+    let (url, second) = stalled_503_body_server().await;
+    let client = quick()
+        .retries(1)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .unwrap();
+    let start = std::time::Instant::now();
+    let response = client.get(format!("{url}/slow")).await.unwrap();
+    assert_eq!(response.status(), 200);
+    let waited = second.lock().unwrap().unwrap() - start;
+    // The drain gives up after 250 ms; before, it waited out the 30 s
+    // per-attempt timeout.
+    assert!(
+        waited < Duration::from_secs(10),
+        "retry started after {waited:?}"
+    );
+}
+
 #[tokio::test]
 async fn status_408_is_retried_but_501_is_not() {
     let server = MockServer::start().await;

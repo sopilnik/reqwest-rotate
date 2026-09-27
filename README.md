@@ -124,9 +124,12 @@ Delays are full-jitter exponential with a configurable cap. A `Retry-After` head
 gets the same backoff as no header at all. Ask for longer than `max_retry_after`
 (30 s by default) and you get the response instead of an early retry.
 
-Before a retry, roughly 64 KiB of the failed response's body is read so the connection
-can be reused. A bigger error page costs a reconnect on HTTP/1 or a reset stream on
-HTTP/2, not the memory to buffer it. After the last of N+1 attempts you get the
+Before a retry, up to 64 KiB of an HTTP/1 error body is read so the connection can be
+reused, for at most the coming backoff or 250 ms, whichever is longer; the read and
+the backoff overlap rather than adding up. A body that does not end in that time or
+within 64 KiB is dropped along with its connection, and one that declares a length
+over 64 KiB is dropped without being read. Over HTTP/2 the body is never read:
+dropping it resets only its own stream. After the last of N+1 attempts you get the
 response as-is: check `status()`, or call `error_for_status()`, exactly as with
 `reqwest`. A transport error is returned as `Error::Reqwest`; its message is the
 short `request failed`, and the cause is the error's `source`, which `anyhow`'s

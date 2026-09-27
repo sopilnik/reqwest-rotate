@@ -35,6 +35,10 @@ const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// HTTP/2, and no buffering either way.
 const DRAIN_BUDGET: usize = 64 * 1024;
 
+/// Shortest time a retry gives an error body to end before it gives up on
+/// reusing the connection; a longer backoff gives it that backoff instead.
+const DRAIN_TIME_FLOOR: Duration = Duration::from_millis(250);
+
 /// Hook that lets callers apply their own `reqwest::ClientBuilder`
 /// settings. Called once per underlying client (one direct, one per proxy).
 type ConfigureFn = dyn Fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder + Send + Sync;
@@ -346,9 +350,11 @@ impl RotatingClient {
                         });
                     }
                     trace_log!("retrying after {delay:?}, status={status}");
-                    drain(response).await;
-                    if !delay.is_zero() {
-                        tokio::time::sleep(delay).await;
+                    // `delay` is at most `MAX_DURATION`, so this cannot overflow.
+                    let wake = tokio::time::Instant::now() + delay;
+                    drain(response, delay.max(DRAIN_TIME_FLOOR)).await;
+                    if tokio::time::Instant::now() < wake {
+                        tokio::time::sleep_until(wake).await;
                     }
                 }
                 Err(err) => {
@@ -570,19 +576,31 @@ fn log_url(url: &reqwest::Url) -> String {
 }
 
 /// Reads roughly [`DRAIN_BUDGET`] bytes of a response body that is about
-/// to be retried. A body that ends within the budget hands its connection
-/// back to the pool; a longer one is dropped mid-stream, which costs a
-/// reconnect on HTTP/1 or a reset stream on HTTP/2. Every chunk is charged
-/// at least one unit, so a stream of empty chunks cannot keep the drain
-/// alive.
-async fn drain(mut response: Response) {
-    let mut budget = DRAIN_BUDGET;
-    while budget > 0 {
-        match response.chunk().await {
-            Ok(Some(chunk)) => budget = spend(budget, chunk.len()),
-            _ => break,
-        }
+/// to be retried, for at most `time_limit`, so an HTTP/1 connection can go
+/// back to the pool. Skipped on HTTP/2, where dropping the body resets
+/// only its own stream and the connection stays pooled, and when the
+/// declared length is already over the budget. A body that does not end
+/// in time or within the budget is dropped along with its connection.
+/// Every chunk is charged at least one unit, so a stream of empty chunks
+/// cannot keep the drain alive.
+async fn drain(mut response: Response, time_limit: Duration) {
+    if response.version() == reqwest::Version::HTTP_2
+        || response
+            .content_length()
+            .is_some_and(|len| len > DRAIN_BUDGET as u64)
+    {
+        return;
     }
+    let _ = tokio::time::timeout(time_limit, async {
+        let mut budget = DRAIN_BUDGET;
+        while budget > 0 {
+            match response.chunk().await {
+                Ok(Some(chunk)) => budget = spend(budget, chunk.len()),
+                _ => break,
+            }
+        }
+    })
+    .await;
 }
 
 /// Charges one chunk against the drain budget; an empty chunk still costs
@@ -1116,6 +1134,29 @@ mod tests {
         assert_eq!(spend(10, 4), 6);
         assert_eq!(spend(1, 0), 0);
         assert_eq!(spend(3, 10), 0);
+    }
+
+    fn stalled_response(version: reqwest::Version) -> Response {
+        let body = reqwest::Body::wrap_stream(futures_util::stream::pending::<
+            Result<&'static [u8], std::io::Error>,
+        >());
+        let mut response = http::Response::new(body);
+        *response.version_mut() = version;
+        Response::from(response)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn drain_gives_up_on_a_stalled_body_at_its_time_limit() {
+        let start = tokio::time::Instant::now();
+        drain(stalled_response(reqwest::Version::HTTP_11), DRAIN_TIME_FLOOR).await;
+        assert_eq!(start.elapsed(), DRAIN_TIME_FLOOR);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn drain_skips_an_http2_body() {
+        let start = tokio::time::Instant::now();
+        drain(stalled_response(reqwest::Version::HTTP_2), DRAIN_TIME_FLOOR).await;
+        assert_eq!(start.elapsed(), Duration::ZERO);
     }
 
     #[test]
