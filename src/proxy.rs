@@ -533,8 +533,7 @@ mod tests {
 
     #[test]
     fn pick_index_cursor_wraps_when_every_proxy_is_cooling_down() {
-        // "c" (the last index) is set up to recover soonest; the write
-        // after it must wrap the cursor back to 0, not grow past `len`.
+        // "c" is due back first. Picking it must wrap the cursor to 0.
         let list = list(&["http://a", "http://b", "http://c"]);
         let now = Instant::now();
         {
@@ -551,8 +550,7 @@ mod tests {
     fn pick_index_avoiding_cursor_wraps_at_len() {
         let list = list(&["http://a", "http://b", "http://c"]);
         list.lock().next_index = 2;
-        // Cursor at the last index; avoiding "b" still finds "c" at once,
-        // and the wrap after it must land back on 0, not grow past `len`.
+        // Cursor on "c", "b" avoided: "c" it is, and the cursor wraps to 0.
         assert_eq!(list.pick_index_avoiding(&[1]), Some(2));
         assert_eq!(list.lock().next_index, 0);
     }
@@ -560,9 +558,7 @@ mod tests {
     #[test]
     fn pick_index_ties_prefer_rotation_order() {
         let list = list(&["http://a", "http://b"]);
-        // Same cooldown expiry for both: with every proxy cooling down,
-        // "a" comes first in rotation and must stay the fallback pick on
-        // an exact tie, not lose it to "b".
+        // Exact tie: rotation order decides.
         let until = Instant::now().checked_add(Duration::from_secs(60)).unwrap();
         {
             let mut state = list.lock();

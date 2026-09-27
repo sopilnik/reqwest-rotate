@@ -1,5 +1,3 @@
-//! Per-host pacing, including across clones and across retry attempts.
-
 mod common;
 
 use std::time::Duration;

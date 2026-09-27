@@ -1,6 +1,3 @@
-//! Proxy configuration, rotation, cooldown, and the `407`/`429` paths that
-//! decide which proxy carries the next attempt.
-
 mod common;
 
 use std::sync::atomic::Ordering;

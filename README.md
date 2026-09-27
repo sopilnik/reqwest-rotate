@@ -95,11 +95,9 @@ connect, times out, drops the connection or answers `407` to a plain `http://`
 request it forwards itself goes on cooldown and is skipped until the cooldown
 expires or the proxy answers again. A `Retry-After` on that `407` is deliberately
 not honoured, since the wait belongs to the failed proxy, not to the server. A
-per-attempt timeout counts as the proxy's failure, since the client cannot tell a
-stalled proxy from a stalled origin; the mark clears the first time the proxy
-answers again, but while every proxy is cooling down, requests go through the
-one whose cooldown ends first, so a single slow origin can concentrate traffic
-on one proxy for up to `proxy_cooldown`.
+per-attempt timeout counts as the proxy's failure too: the client cannot tell a
+stalled proxy from a stalled origin, and blaming it is cheap, since the mark clears
+the first time the proxy answers again.
 
 If another proxy is out of cooldown the retry goes through it immediately; if none
 is, retries fall back to the backoff. Any other status is the origin's answer: you
@@ -114,17 +112,16 @@ origin with a broken certificate therefore uses up every attempt, and can cool d
 one proxy per attempt.
 
 Only the proxies you configure are used; `HTTP_PROXY` and friends are ignored.
-`http://`, `https://` and bare `host:port` work out of the box; `socks5://`
-and the other SOCKS schemes need the `socks` feature (without it they are
-rejected when the client is built, not silently on every request), and a
-`host:port:user:pass` vendor export is rejected with a hint to write it as
-`http://user:pass@host:port`. Credentials for an `http://` proxy (as HTTP
-Basic authentication) or a SOCKS proxy are sent to it unencrypted; use an
-`https://` proxy if the path to it is not trusted. With
-proxies configured, a request never goes out directly: when every proxy is in
-cooldown, the one whose cooldown ends soonest is tried anyway. The pool is a
-[`ProxyList`], and `client.proxies()` shows which proxies are in cooldown,
-with `mark_bad`/`mark_good` to let your own health check steer it.
+`http://`, `https://` and bare `host:port` work out of the box. SOCKS schemes need
+the `socks` feature; without it `build()` rejects them, instead of every request
+failing later. A `host:port:user:pass` line, as vendors export it, is rejected with
+a hint to write `http://user:pass@host:port`. An `http://` or SOCKS proxy gets your
+credentials in the clear, so use `https://` if you do not trust the path to it.
+
+With proxies set, nothing goes out directly. If every proxy is cooling down, the one
+that comes back first takes the traffic, so one slow origin can pile everything onto
+it for up to `proxy_cooldown`. [`ProxyList`] (from `client.proxies()`) shows the
+cooldowns, and `mark_bad`/`mark_good` let your own health check steer it.
 
 Proxy credentials never reach `Debug` output, error messages, `tracing` events
 or the `proxy` field of an [`on_retry`] event, and logged URLs drop their query
@@ -141,11 +138,13 @@ callers to one host are serialised, not dropped.
 
 **Retry with backoff.**
 
-| Retried for | Cases |
+| Retried for | When |
 |---|---|
-| every method | `408`, `429`, `503`; a `407` from a proxy that forwarded the request itself; connect failures, including connect timeouts and a failed TLS handshake; requests cancelled before dispatch; HTTP/2 `REFUSED_STREAM`; a graceful HTTP/2 `GOAWAY(NO_ERROR)` that left the request unprocessed |
-| idempotent methods only (`GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE`, `TRACE`) | other `5xx` except `501`/`505`; request timeouts; an HTTP/2 stream reset other than `REFUSED_STREAM`; connections dropped before a response arrived (the classic keep-alive race of long-running scrapers); a `GOAWAY` naming an actual error code |
-| never | everything else; a non-idempotent request such as `POST` is retried only in the first row's cases, where the server did not act on it, so it is never duplicated |
+| any method, `POST` too | `408`, `429`, `503`; a `407` from a proxy that forwarded the request itself; connect failures, connect timeouts and failed TLS handshakes included; requests cancelled before dispatch; HTTP/2 `REFUSED_STREAM`, or a `GOAWAY(NO_ERROR)` that left the request unprocessed |
+| `GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE`, `TRACE` | other `5xx` except `501`/`505`; request timeouts; any other HTTP/2 reset or error-code `GOAWAY`; a connection dropped before the response (the classic keep-alive race of long-running scrapers) |
+
+Nothing else is retried. In the first row the server never acted on the request,
+so a `POST` is never sent twice.
 
 reqwest's own retry layer is switched off, so `retries()` counts attempts exactly,
 unless `configure(..)` sets a policy of its own. With `switch_proxy_on_429(true)`, a
@@ -217,11 +216,10 @@ is the opposite trade-off: one ready-to-use client that bundles rotation,
 rate limiting, and retry together, for when you want a working scraper
 client and do not want to assemble the pieces yourself.
 
-`reqwest-middleware` with `reqwest-retry` gives you retries as a middleware
-stack, but no proxy rotation or per-host rate limiting, and it retries
-through the same connection settings every time. Use it when you already run
-a middleware stack; use this crate when you want the three together with
-proxy-aware retry decisions.
+`reqwest-retry` (on `reqwest-middleware`) does retries, but knows nothing about
+proxies or per-host pacing: a retry goes out the same way the failed attempt did.
+If you already run a middleware stack, it is the smaller step. If you want a retry
+that knows which proxy failed, that is what this crate is for.
 
 ## Minimum supported Rust version
 

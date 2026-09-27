@@ -1,5 +1,3 @@
-//! How the `Retry-After` header interacts with backoff and its cap.
-
 mod common;
 
 use std::time::Duration;

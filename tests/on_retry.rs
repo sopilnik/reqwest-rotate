@@ -1,6 +1,3 @@
-//! The `on_retry` hook: when it fires, what it reports, and when it stays
-//! silent.
-
 mod common;
 
 use std::sync::atomic::Ordering;

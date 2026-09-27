@@ -741,9 +741,8 @@ impl RotatingClientBuilder {
     /// `reqwest::Client` picks up are ignored. Pass them explicitly if you
     /// want them.
     ///
-    /// Credentials for an `http://` proxy (as HTTP Basic authentication) or
-    /// a SOCKS proxy are sent to it unencrypted; use an `https://` proxy if
-    /// the path to it is not trusted.
+    /// Over `http://` or SOCKS the proxy password travels unencrypted; use
+    /// an `https://` proxy on a network you do not trust.
     ///
     /// Each proxy gets its own underlying `reqwest::Client`, built eagerly
     /// with its own connection pool and TLS configuration.
@@ -913,16 +912,14 @@ impl RotatingClientBuilder {
     /// Applies your own settings to every underlying
     /// [`reqwest::ClientBuilder`] (one direct client plus one per proxy):
     /// default headers, redirect policy, TLS options, and so on. Runs after
-    /// this builder's own settings, so it can override them. That includes
-    /// TLS: a `danger_accept_invalid_certs(true)` here turns off certificate
-    /// checks on every request, through every proxy, which is where a man
-    /// in the middle is most likely. A `.retry(..)` call in here overrides
-    /// the crate's own `retry(never())`, bringing reqwest's layer back and
-    /// letting attempts multiply past what [`retries`](Self::retries)
-    /// counts. A header added here through `default_headers` shows up in
-    /// `Debug` output exactly as it would on a plain `reqwest::Client`;
-    /// mark its `HeaderValue` sensitive with `set_sensitive(true)` if it
-    /// should not.
+    /// this builder's own settings, so it wins.
+    ///
+    /// That cuts both ways. `danger_accept_invalid_certs(true)` here applies
+    /// through every proxy, which is exactly where a man in the middle would
+    /// sit. A `.retry(..)` brings reqwest's own retries back on top of what
+    /// [`retries`](Self::retries) counts. A header set with `default_headers`
+    /// prints in `Debug` as it would on a plain `reqwest::Client`; call
+    /// `set_sensitive(true)` on it if that matters.
     ///
     /// Anything behind a `reqwest` cargo feature (`gzip`, `brotli`,
     /// `cookies`, ...) needs that feature enabled on *your* `reqwest`

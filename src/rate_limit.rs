@@ -250,7 +250,7 @@ mod tests {
         limiter.wait("example.com").await;
         let start = Instant::now();
         limiter.wait("example.com").await;
-        assert_eq!(Instant::now() - start, Duration::from_millis(500));
+        assert_eq!(start.elapsed(), Duration::from_millis(500));
     }
 
     #[tokio::test(start_paused = true)]
@@ -287,7 +287,7 @@ mod tests {
         limiter.wait("example.com").await;
         let start = Instant::now();
         limiter.wait("example.com").await;
-        assert_eq!(Instant::now() - start, crate::MAX_DURATION);
+        assert_eq!(start.elapsed(), crate::MAX_DURATION);
     }
 
     #[tokio::test(start_paused = true)]
@@ -360,7 +360,7 @@ mod tests {
         limiter.wait("trigger.example").await;
         let start = Instant::now();
         limiter.wait("live.example").await;
-        assert_eq!(Instant::now() - start, interval / 2);
+        assert_eq!(start.elapsed(), interval / 2);
     }
 
     #[tokio::test(start_paused = true)]
@@ -467,7 +467,7 @@ mod tests {
 
         let start = Instant::now();
         limiter.wait(host).await;
-        assert_eq!(Instant::now() - start, Duration::from_millis(490));
+        assert_eq!(start.elapsed(), Duration::from_millis(490));
     }
 
     #[tokio::test(start_paused = true)]
@@ -482,13 +482,13 @@ mod tests {
             limiter.wait(host)
         );
         assert!(first.is_err());
-        assert_eq!(Instant::now() - t0, Duration::from_millis(1000));
+        assert_eq!(t0.elapsed(), Duration::from_millis(1000));
 
         // The surviving (second) reservation must still be honoured in full,
         // not rolled back by the cancelled call that queued ahead of it.
         let start = Instant::now();
         limiter.wait(host).await;
-        assert_eq!(Instant::now() - start, Duration::from_millis(500));
+        assert_eq!(start.elapsed(), Duration::from_millis(500));
     }
 
     #[tokio::test(start_paused = true)]
@@ -509,7 +509,7 @@ mod tests {
 
         let start = Instant::now();
         limiter.wait(host).await;
-        assert_eq!(Instant::now() - start, Duration::from_millis(500));
+        assert_eq!(start.elapsed(), Duration::from_millis(500));
     }
 
     #[tokio::test(start_paused = true)]
@@ -541,7 +541,7 @@ mod tests {
         let spawn = move |l: std::sync::Arc<RateLimiter>| {
             tokio::spawn(async move {
                 l.wait("example.com").await;
-                Instant::now() - start
+                start.elapsed()
             })
         };
         let a = spawn(limiter.clone());

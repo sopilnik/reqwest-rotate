@@ -97,7 +97,7 @@ and this project uses [Semantic Versioning](https://semver.org/).
   chain-walking reporter such as `anyhow`'s `{:#}` prints it once.
 - `ProxyList::in_cooldown` is now `#[must_use]`, like the other queries
   on `ProxyList`.
-- The minimum supported Rust version stays 1.85.
+- MSRV unchanged: 1.85.
 
 ### Fixed
 

@@ -1,5 +1,4 @@
-//! `RequestBuilder`'s pass-through setters: each one reaches the server, and
-//! `send()` still goes through the same retry path as `get()`.
+//! Also checks that send() still retries.
 
 mod common;
 

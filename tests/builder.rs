@@ -1,5 +1,4 @@
-//! Builder and client identity: `Clone`, shared vs. separate state, and the
-//! hooks a clone keeps.
+//! Mostly Clone: what a clone shares and what it does not.
 
 mod common;
 
