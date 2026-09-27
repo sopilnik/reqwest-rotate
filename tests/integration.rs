@@ -477,6 +477,36 @@ async fn retry_after_over_the_cap_returns_the_response() {
 }
 
 #[tokio::test]
+async fn retry_after_exactly_at_the_cap_is_honoured() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/limited"))
+        .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "0"))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/limited"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    // A zero ask against a zero cap: equal, so honoured, with no real wait.
+    let client = quick()
+        .retries(1)
+        .max_retry_after(Duration::ZERO)
+        .build()
+        .unwrap();
+
+    let response = client
+        .get(format!("{}/limited", server.uri()))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+}
+
+#[tokio::test]
 async fn retry_after_missing_falls_back_to_backoff() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

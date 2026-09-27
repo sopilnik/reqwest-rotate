@@ -32,3 +32,14 @@ macro_rules! trace_log {
     };
 }
 pub(crate) use trace_log;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn max_duration_is_one_year_in_seconds() {
+        assert_eq!(
+            crate::MAX_DURATION,
+            std::time::Duration::from_secs(31_536_000)
+        );
+    }
+}

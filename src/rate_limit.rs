@@ -380,6 +380,44 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn prune_runs_exactly_when_due_not_only_after() {
+        let interval = Duration::from_millis(10);
+        let spacing = interval * PRUNE_SPACING_MULTIPLE;
+        let limiter = RateLimiter::new(Some(interval));
+
+        for i in 0..=PRUNE_ABOVE_HOSTS {
+            limiter.wait(&format!("host-{i}.example")).await;
+        }
+        // Crosses the length threshold and runs the first prune (nothing
+        // stale yet), which schedules the next one exactly `spacing` from
+        // here.
+        limiter.wait("first-trigger.example").await;
+
+        // Land exactly on that schedule: due, not merely overdue.
+        tokio::time::advance(spacing).await;
+        limiter.wait("second-trigger.example").await;
+
+        assert_eq!(tracked_hosts(&limiter), 1); // only second-trigger
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn prune_drops_a_slot_exactly_at_the_cutoff() {
+        let interval = Duration::from_millis(10);
+        let limiter = RateLimiter::new(Some(interval));
+
+        for i in 0..=PRUNE_ABOVE_HOSTS {
+            limiter.wait(&format!("host-{i}.example")).await;
+        }
+
+        // Every slot above sits exactly one interval before the prune
+        // below: right at the cutoff a strict boundary must drop.
+        tokio::time::advance(interval).await;
+        limiter.wait("trigger.example").await;
+
+        assert_eq!(tracked_hosts(&limiter), 1); // only trigger
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn cancelled_wait_gives_its_slot_back() {
         let limiter = RateLimiter::new(Some(Duration::from_millis(500)));
         let host = "example.com";

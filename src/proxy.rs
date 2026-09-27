@@ -502,11 +502,37 @@ mod tests {
     }
 
     #[test]
+    fn pick_index_wraps_around_skipping_a_cooled_down_proxy() {
+        let list = list(&["http://a", "http://b", "http://c"]);
+        list.mark_bad("http://b", Duration::from_secs(60));
+        // More picks than proxies, over two full laps and one more: each
+        // lap must skip "b" every time it comes up, not just the first.
+        let picks: Vec<&str> = (0..7).map(|_| list.pick().unwrap()).collect();
+        assert_eq!(
+            picks,
+            [
+                "http://a/",
+                "http://c/",
+                "http://a/",
+                "http://c/",
+                "http://a/",
+                "http://c/",
+                "http://a/",
+            ]
+        );
+    }
+
+    #[test]
     fn empty_list_has_no_pick() {
         let list = ProxyList::new(Vec::<String>::new()).unwrap();
         assert!(list.is_empty());
         assert_eq!(list.len(), 0);
         assert_eq!(list.pick(), None);
+    }
+
+    #[test]
+    fn is_empty_is_false_for_a_nonempty_list() {
+        assert!(!list(&["http://a"]).is_empty());
     }
 
     #[test]
@@ -716,6 +742,11 @@ mod tests {
         // With every proxy cooling down, consecutive picks repeat the
         // soonest-recovering one: nothing here has answered to clear it.
         assert_eq!(list.pick(), Some("http://b/"));
+        // Rotation then carries on after the proxy it fell back to.
+        for proxy in ["http://a", "http://b", "http://c"] {
+            list.mark_good(proxy);
+        }
+        assert_eq!(list.pick(), Some("http://c/"));
     }
 
     #[test]

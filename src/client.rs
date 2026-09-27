@@ -658,28 +658,43 @@ pub struct RotatingClientBuilder {
 
 impl fmt::Debug for RotatingClientBuilder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            proxies,
+            proxy_list,
+            rate_limit,
+            retries,
+            backoff_base,
+            backoff_max,
+            max_retry_after,
+            proxy_cooldown,
+            switch_proxy_on_429,
+            user_agent,
+            timeout,
+            connect_timeout,
+            configure,
+            on_retry,
+        } = self;
         f.debug_struct("RotatingClientBuilder")
             .field(
                 "proxies",
-                &self
-                    .proxies
+                &proxies
                     .iter()
                     .map(|url| crate::proxy::redact_userinfo(url))
                     .collect::<Vec<_>>(),
             )
-            .field("proxy_list", &self.proxy_list)
-            .field("rate_limit", &self.rate_limit)
-            .field("retries", &self.retries)
-            .field("backoff_base", &self.backoff_base)
-            .field("backoff_max", &self.backoff_max)
-            .field("max_retry_after", &self.max_retry_after)
-            .field("proxy_cooldown", &self.proxy_cooldown)
-            .field("switch_proxy_on_429", &self.switch_proxy_on_429)
-            .field("user_agent", &self.user_agent)
-            .field("timeout", &self.timeout)
-            .field("connect_timeout", &self.connect_timeout)
-            .field("configure", &self.configure.as_ref().map(|_| "<fn>"))
-            .field("on_retry", &self.on_retry.as_ref().map(|_| "<fn>"))
+            .field("proxy_list", proxy_list)
+            .field("rate_limit", rate_limit)
+            .field("retries", retries)
+            .field("backoff_base", backoff_base)
+            .field("backoff_max", backoff_max)
+            .field("max_retry_after", max_retry_after)
+            .field("proxy_cooldown", proxy_cooldown)
+            .field("switch_proxy_on_429", switch_proxy_on_429)
+            .field("user_agent", user_agent)
+            .field("timeout", timeout)
+            .field("connect_timeout", connect_timeout)
+            .field("configure", &configure.as_ref().map(|_| "<fn>"))
+            .field("on_retry", &on_retry.as_ref().map(|_| "<fn>"))
             .finish()
     }
 }
