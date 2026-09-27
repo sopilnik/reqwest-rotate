@@ -23,7 +23,7 @@ or add them to `Cargo.toml` directly:
 
 ```toml
 [dependencies]
-reqwest-rotate = "0.1"
+reqwest-rotate = "0.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 # Only if you name reqwest types yourself (configure, request, send, Url):
 # it must be the same 0.13 this crate uses.
@@ -37,7 +37,7 @@ features and enable `native-tls`:
 
 ```toml
 [dependencies]
-reqwest-rotate = { version = "0.1", default-features = false, features = ["native-tls"] }
+reqwest-rotate = { version = "0.2", default-features = false, features = ["native-tls"] }
 ```
 
 ### Features

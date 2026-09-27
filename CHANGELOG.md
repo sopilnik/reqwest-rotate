@@ -4,7 +4,7 @@ All notable changes to this crate are documented in this file. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] - 2026-09-27
 
 ### Added
 
@@ -193,6 +193,6 @@ Also in this release:
   `socks4a://`, `socks5://` and `socks5h://` proxies, and `tracing`
   emits debug-level events for retries and proxy rotation.
 
-[Unreleased]: https://github.com/sopilnik/reqwest-rotate/compare/v0.1.1...HEAD
+[0.2.0]: https://github.com/sopilnik/reqwest-rotate/releases/tag/v0.2.0
 [0.1.1]: https://github.com/sopilnik/reqwest-rotate/releases/tag/v0.1.1
 [0.1.0]: https://github.com/sopilnik/reqwest-rotate/releases/tag/v0.1.0
