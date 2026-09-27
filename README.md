@@ -112,11 +112,12 @@ request unprocessed. A `GOAWAY` naming an actual error code is idempotent-only, 
 a stream reset.
 
 reqwest's own retry layer is switched off, so `retries()` counts attempts exactly,
-unless `configure(..)` sets a policy of its own. With `switch_proxy_on_429(true)` and
-another proxy out of cooldown, a `429` that came through a proxy is retried at once
-through the next proxy in rotation instead of waiting on its `Retry-After`, since a
-per-IP limit does not bind another IP. The limited proxy is not put in cooldown. Off
-by default.
+unless `configure(..)` sets a policy of its own. With `switch_proxy_on_429(true)`, a
+`429` that came through a proxy is retried at once through a proxy this call has not
+already seen limited, instead of waiting on its `Retry-After`, since a per-IP limit
+does not bind another IP. The limited proxy is not put in cooldown. Once every
+healthy proxy has answered `429` to this call, the usual `Retry-After`/backoff path
+applies. Off by default.
 
 Delays are full-jitter exponential with a configurable cap. A `Retry-After` header
 (seconds or HTTP-date) can lengthen the wait but never shortens it, so `Retry-After: 0`

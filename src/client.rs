@@ -229,6 +229,10 @@ impl RotatingClient {
         // expects.
         let mut pending = Some(request);
         let mut attempt: u32 = 0;
+        // Proxies this call has already seen answer 429, so switch_proxy_on_429
+        // does not send it straight back to one of them. Empty and allocation-free
+        // unless the feature is on and a 429 actually comes back.
+        let mut limited: Vec<usize> = Vec::new();
 
         loop {
             let mut is_last_attempt = attempt >= inner.retries;
@@ -257,7 +261,7 @@ impl RotatingClient {
                 .wait(current.url().host_str().unwrap_or(""))
                 .await;
 
-            let proxy_idx = inner.proxies.pick_index();
+            let proxy_idx = inner.proxies.pick_index_avoiding(&limited);
             let client = match proxy_idx {
                 Some(idx) => &inner.proxy_clients[idx],
                 None => &inner.direct_client,
@@ -299,10 +303,15 @@ impl RotatingClient {
                     }
 
                     let delay = if let Some(idx) = blamed_proxy {
-                        switch_delay(inner, attempt, idx)
+                        switch_delay(inner, attempt, idx, &limited)
                     } else if inner.switch_proxy_on_429
                         && status == StatusCode::TOO_MANY_REQUESTS
-                        && proxy_idx.is_some_and(|idx| inner.proxies.any_healthy_except(idx))
+                        && proxy_idx.is_some_and(|idx| {
+                            if !limited.contains(&idx) {
+                                limited.push(idx);
+                            }
+                            inner.proxies.any_healthy_outside(&limited)
+                        })
                     {
                         trace_log!(
                             "proxy {} answered 429: switching to another proxy without waiting",
@@ -360,7 +369,7 @@ impl RotatingClient {
                     }
 
                     let delay = if let Some(idx) = blamed_proxy {
-                        switch_delay(inner, attempt, idx)
+                        switch_delay(inner, attempt, idx, &limited)
                     } else {
                         backoff_delay(attempt, inner.backoff_base, inner.backoff_max)
                     };
@@ -523,13 +532,22 @@ impl RequestBuilder {
 }
 
 /// Delay before the next attempt after blaming proxy `idx` for this one.
-/// Zero when another proxy is out of cooldown, since the next attempt
-/// already lands on different hardware and there is nothing to wait for;
-/// excluding `idx` itself matters at a zero cooldown, where it would
-/// otherwise count as its own healthy alternative. The usual backoff
-/// otherwise, so a lone dead proxy is not hammered back to back.
-fn switch_delay(inner: &Inner, attempt: u32, idx: usize) -> Duration {
-    if inner.proxies.any_healthy_except(idx) {
+/// Zero when a proxy other than `idx`, and outside `limited` (the proxies
+/// this call already saw answer 429), is out of cooldown, since the
+/// next attempt then lands on different hardware and there is nothing to
+/// wait for; excluding `idx` itself matters at a zero cooldown, where it
+/// would otherwise count as its own healthy alternative. The usual
+/// backoff otherwise, so a lone dead proxy is not hammered back to back
+/// and a limited one is not asked again at once.
+fn switch_delay(inner: &Inner, attempt: u32, idx: usize, limited: &[usize]) -> Duration {
+    let other_healthy = if limited.is_empty() {
+        inner.proxies.any_healthy_except(idx)
+    } else {
+        let mut avoid = limited.to_vec();
+        avoid.push(idx);
+        inner.proxies.any_healthy_outside(&avoid)
+    };
+    if other_healthy {
         Duration::ZERO
     } else {
         backoff_delay(attempt, inner.backoff_base, inner.backoff_max)
@@ -741,13 +759,17 @@ impl RotatingClientBuilder {
     }
 
     /// When a `429` comes back through a proxy, retry it right away
-    /// through whichever proxy rotation picks next instead of waiting: a
-    /// per-IP rate limit does not bind another IP, so the `429`'s
-    /// `Retry-After` is ignored and the limited proxy is not put in
-    /// cooldown. Falls back to the usual `Retry-After`/backoff path when
-    /// no other proxy is out of cooldown, or when the `429` came through
-    /// the direct client. Other statuses, `503` included, are not
-    /// affected. Default: off.
+    /// through a proxy this call has not already seen limited, instead of
+    /// waiting: a per-IP rate limit does not bind another IP, so the
+    /// `429`'s `Retry-After` is ignored and the limited proxy is not put
+    /// in cooldown. Within one call each proxy is tried at most once this
+    /// way; once every healthy proxy has answered `429`, the usual
+    /// `Retry-After`/backoff path applies, the same as when the `429`
+    /// came through the direct client. Other statuses, `503` included,
+    /// are not affected. Under concurrent use, other requests can put every
+    /// other proxy in cooldown before the retry goes out; the retry then
+    /// takes the usual rotation, which can lead back to a limited proxy.
+    /// Default: off.
     #[must_use]
     pub const fn switch_proxy_on_429(mut self, switch: bool) -> Self {
         self.switch_proxy_on_429 = switch;

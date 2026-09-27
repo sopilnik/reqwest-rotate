@@ -197,6 +197,43 @@ impl ProxyList {
             .any(|(i, until)| i != idx && until.is_none_or(|until| now >= until))
     }
 
+    /// Like [`pick_index`](Self::pick_index), but passes over the proxies
+    /// in `avoid` while a healthy one outside it exists.
+    pub(crate) fn pick_index_avoiding(&self, avoid: &[usize]) -> Option<usize> {
+        if avoid.is_empty() {
+            return self.pick_index();
+        }
+        let len = self.proxies.len();
+        {
+            let mut state = self.lock();
+            let now = Instant::now();
+            let start = state.next_index;
+            for offset in 0..len {
+                let idx = (start + offset) % len;
+                if avoid.contains(&idx) {
+                    continue;
+                }
+                if state.bad_until[idx].is_none_or(|until| now >= until) {
+                    state.bad_until[idx] = None;
+                    state.next_index = (idx + 1) % len;
+                    return Some(idx);
+                }
+            }
+        }
+        self.pick_index()
+    }
+
+    /// Whether a proxy outside `avoid` is out of cooldown right now.
+    pub(crate) fn any_healthy_outside(&self, avoid: &[usize]) -> bool {
+        let state = self.lock();
+        let now = Instant::now();
+        state
+            .bad_until
+            .iter()
+            .enumerate()
+            .any(|(i, until)| !avoid.contains(&i) && until.is_none_or(|until| now >= until))
+    }
+
     /// Marks a proxy as bad for `cooldown`: [`pick`](Self::pick) will skip
     /// it, unless every proxy is unhealthy, until the cooldown expires, the
     /// proxy answers a request sent through a
@@ -618,6 +655,17 @@ mod tests {
 
         let single = list(&["http://a"]);
         assert!(!single.any_healthy_except(0));
+    }
+
+    #[test]
+    fn pick_avoiding_skips_a_healthy_proxy_it_is_told_to_avoid() {
+        let pool = list(&["http://a", "http://b"]);
+        assert_eq!(pool.pick_index_avoiding(&[0]), Some(1));
+        assert_eq!(pool.pick_index_avoiding(&[1]), Some(0));
+        // Nothing else healthy: avoid is advisory, and the plain rotation
+        // carries on from the cursor.
+        assert_eq!(pool.pick_index_avoiding(&[0, 1]), Some(1));
+        assert!(!pool.any_healthy_outside(&[0, 1]));
     }
 
     #[test]

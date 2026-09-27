@@ -1225,6 +1225,129 @@ async fn switch_proxy_on_429_waits_when_the_other_proxy_is_cooling_down() {
 }
 
 #[tokio::test]
+async fn switch_proxy_on_429_does_not_go_back_to_a_limited_proxy() {
+    const LIMITED_429: &[u8] =
+        b"HTTP/1.1 429 Too Many Requests\r\nretry-after: 30\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+    let (a, a_seen) = raw_server(0, LIMITED_429).await;
+    let (b, b_seen) = raw_server(0, LIMITED_429).await;
+    let client = RotatingClient::builder()
+        .proxies([a.as_str(), b.as_str()])
+        .retries(3)
+        .switch_proxy_on_429(true)
+        .max_retry_after(Duration::from_secs(1))
+        .build()
+        .unwrap();
+
+    let response = client.get("http://example.invalid/page").await.unwrap();
+
+    // Each proxy was told to wait 30 s. Once both have been tried, the
+    // 30 s ask above the 1 s cap returns the response instead of
+    // hitting either IP again.
+    assert_eq!(response.status(), 429);
+    assert_eq!(a_seen.load(Ordering::SeqCst), 1);
+    assert_eq!(b_seen.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn switch_proxy_on_429_falls_back_once_every_proxy_is_limited() {
+    const LIMITED: &[u8] =
+        b"HTTP/1.1 429 Too Many Requests\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+    let (a, a_seen) = raw_server(0, LIMITED).await;
+    let (b, b_seen) = raw_server(0, LIMITED).await;
+    let (hook, events) = record_retries();
+    let client = RotatingClient::builder()
+        .proxies([a.as_str(), b.as_str()])
+        .retries(2)
+        .switch_proxy_on_429(true)
+        .backoff(Duration::from_millis(50), Duration::from_millis(50))
+        .on_retry(hook)
+        .build()
+        .unwrap();
+
+    let response = client.get("http://example.invalid/page").await.unwrap();
+
+    // One switch at no delay; then both proxies have answered 429 to this
+    // call, and the second retry waits out the backoff instead.
+    assert_eq!(response.status(), 429);
+    assert_eq!(
+        a_seen.load(Ordering::SeqCst) + b_seen.load(Ordering::SeqCst),
+        3
+    );
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].delay, Duration::ZERO);
+    assert!(events[1].delay > Duration::ZERO, "{:?}", events[1].delay);
+}
+
+#[tokio::test]
+async fn switch_proxy_on_429_does_not_return_to_a_limited_proxy_after_a_407() {
+    let (limited, limited_seen) = raw_server(
+        0,
+        b"HTTP/1.1 429 Too Many Requests\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+    )
+    .await;
+    let (auth, auth_seen) = raw_server(
+        0,
+        b"HTTP/1.1 407 Proxy Authentication Required\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+    )
+    .await;
+    let (hook, events) = record_retries();
+    let client = RotatingClient::builder()
+        .proxies([limited.as_str(), auth.as_str()])
+        .retries(2)
+        .switch_proxy_on_429(true)
+        .backoff(Duration::from_millis(50), Duration::from_millis(50))
+        .on_retry(hook)
+        .build()
+        .unwrap();
+
+    let response = client.get("http://example.invalid/page").await.unwrap();
+
+    assert_eq!(response.status(), 429);
+    assert_eq!(limited_seen.load(Ordering::SeqCst), 2);
+    assert_eq!(auth_seen.load(Ordering::SeqCst), 1);
+    let events = events.lock().unwrap();
+    // The 407 cooled the only other proxy: going back to the limited one
+    // waits out the backoff instead of asking it again at once.
+    assert_eq!(
+        events[1].reason,
+        RetryReason::ProxyStatus(StatusCode::PROXY_AUTHENTICATION_REQUIRED)
+    );
+    assert!(events[1].delay > Duration::ZERO, "{:?}", events[1].delay);
+}
+
+#[tokio::test]
+async fn switch_proxy_on_429_leaves_a_503_alone() {
+    let (unavailable, unavailable_seen) = raw_server(
+        0,
+        b"HTTP/1.1 503 Service Unavailable\r\nretry-after: 30\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+    )
+    .await;
+    let (other, other_seen) = raw_server(
+        0,
+        b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\nconnection: close\r\n\r\nvia-b",
+    )
+    .await;
+
+    let client = RotatingClient::builder()
+        .proxies([unavailable.as_str(), other.as_str()])
+        .retries(1)
+        .switch_proxy_on_429(true)
+        .backoff(Duration::from_secs(5), Duration::from_secs(5))
+        .max_retry_after(Duration::from_secs(1))
+        .build()
+        .unwrap();
+
+    let response = client.get("http://example.invalid/page").await.unwrap();
+
+    // Only a 429 switches proxies: the 503's 30 s ask is above the 1 s
+    // cap, so it comes back instead of going to the other proxy.
+    assert_eq!(response.status(), 503);
+    assert_eq!(unavailable_seen.load(Ordering::SeqCst), 1);
+    assert_eq!(other_seen.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn switch_proxy_on_429_leaves_the_direct_client_alone() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

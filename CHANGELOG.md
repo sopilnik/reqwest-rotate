@@ -19,10 +19,12 @@ and this project uses [Semantic Versioning](https://semver.org/).
   through `proxies` is built fresh by each `build()` and is not
   shared.
 - `RotatingClientBuilder::switch_proxy_on_429`. When on, a `429` that
-  came through a proxy is retried at once through the next proxy in
-  rotation instead of waiting: a per-IP rate limit does not bind
-  another IP. The `429`'s `Retry-After` is ignored and the limited
-  proxy is not put in cooldown. Off by default.
+  came through a proxy is retried at once through a proxy this call
+  has not already seen limited, instead of waiting: a per-IP rate
+  limit does not bind another IP. The `429`'s `Retry-After` is
+  ignored and the limited proxy is not put in cooldown. Once every
+  healthy proxy has answered `429` to a call, the usual
+  `Retry-After`/backoff path applies. Off by default.
 - `RotatingClientBuilder::on_retry`. Runs a callback before each retry
   with the attempt number, why it failed, the proxy in use (redacted
   the same way as `tracing` output) and the coming delay, for counters
