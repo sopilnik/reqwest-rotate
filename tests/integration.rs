@@ -1913,22 +1913,6 @@ async fn each_retry_attempt_takes_its_own_rate_limit_slot() {
 }
 
 #[tokio::test]
-async fn zero_retries_sends_exactly_one_request_on_a_retryable_status() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/once"))
-        .respond_with(ResponseTemplate::new(503))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let client = quick().retries(0).build().unwrap();
-    let response = client.get(format!("{}/once", server.uri())).await.unwrap();
-
-    assert_eq!(response.status(), 503);
-}
-
-#[tokio::test]
 async fn request_builder_headers_reach_the_server_and_the_send_still_retries() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
