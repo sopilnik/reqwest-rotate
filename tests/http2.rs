@@ -21,7 +21,7 @@ use reqwest_rotate::{Error, RotatingClient, RotatingClientBuilder};
 fn quick() -> RotatingClientBuilder {
     RotatingClient::builder()
         .backoff(Duration::from_millis(5), Duration::from_millis(20))
-        .configure(|b| b.http2_prior_knowledge())
+        .configure(reqwest::ClientBuilder::http2_prior_knowledge)
 }
 
 /// What the server does with one stream, in the order [`h2_server`] is

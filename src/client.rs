@@ -90,7 +90,7 @@ struct Inner {
 
 impl fmt::Debug for Inner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Inner {
+        let Self {
             direct_client,
             proxy_clients,
             proxies,
@@ -754,9 +754,14 @@ impl RotatingClientBuilder {
     /// `pool_idle_timeout` or `pool_max_idle_per_host`. A large pool can
     /// still hold many sockets open: check the process's open-file limit.
     ///
-    /// For pools of hundreds of proxies, share one TLS config across them
-    /// via [`configure`](Self::configure) and
-    /// [`tls_backend_preconfigured`][tbp].
+    /// With `rustls` on Linux, each of those clients also reads and parses
+    /// the system CA bundle on its own, so a large pool pays for that once
+    /// per proxy, in `build()` time and in memory. For pools that large,
+    /// share one TLS config across them via [`configure`](Self::configure)
+    /// and [`tls_backend_preconfigured`][tbp]; reqwest then uses that
+    /// config as it is, so set its ALPN protocols if you want HTTP/2.
+    /// Either way, call `build()` outside an async task, or in
+    /// `spawn_blocking`.
     ///
     /// [tbp]: reqwest::ClientBuilder::tls_backend_preconfigured
     #[must_use]

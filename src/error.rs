@@ -75,7 +75,7 @@ impl Error {
     /// plain-text reason, for a validation failure that has no underlying
     /// error of its own.
     pub(crate) fn invalid_proxy(proxy: impl Into<String>, reason: impl Into<String>) -> Self {
-        Error::InvalidProxy {
+        Self::InvalidProxy {
             proxy: proxy.into(),
             source: Box::new(ProxyReason(reason.into())),
         }

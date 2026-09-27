@@ -8,8 +8,8 @@ use reqwest_rotate::RotatingClient;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let Some(url) = std::env::args().nth(1) else {
-        println!("usage: get <url>");
-        return Ok(());
+        eprintln!("usage: get <url>");
+        std::process::exit(2);
     };
 
     let client = RotatingClient::builder()

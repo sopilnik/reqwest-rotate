@@ -8,3 +8,13 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+  # Cargo.lock only: the floors in Cargo.toml are set on purpose and
+  # checked by the minimal-versions job, so they are not moved here.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    versioning-strategy: lockfile-only
+    groups:
+      cargo:
+        patterns: ["*"]

@@ -11,8 +11,8 @@ use reqwest_rotate::RotatingClient;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let usage = "usage: PROXIES=<url,url,...> proxy_pool <url>";
     let Some(url) = std::env::args().nth(1) else {
-        println!("{usage}");
-        return Ok(());
+        eprintln!("{usage}");
+        std::process::exit(2);
     };
     let proxies: Vec<String> = std::env::var("PROXIES")
         .unwrap_or_default()
@@ -22,8 +22,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(str::to_owned)
         .collect();
     if proxies.is_empty() {
-        println!("{usage}");
-        return Ok(());
+        eprintln!("{usage}");
+        std::process::exit(2);
     }
 
     let client = RotatingClient::builder()

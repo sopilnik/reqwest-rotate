@@ -11,8 +11,8 @@ use reqwest_rotate::RotatingClient;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let Some(url) = std::env::args().nth(1) else {
-        println!("usage: retry_metrics <url>");
-        return Ok(());
+        eprintln!("usage: retry_metrics <url>");
+        std::process::exit(2);
     };
 
     let counts = Arc::new(Mutex::new(BTreeMap::<&'static str, usize>::new()));

@@ -405,8 +405,7 @@ fn redact_unparsable(raw: &str) -> String {
     let prefix = raw
         .find("://")
         .filter(|p| *p < at)
-        .map(|p| &raw[..p + 3])
-        .unwrap_or("");
+        .map_or("", |p| &raw[..p + 3]);
     format!("{prefix}***@{tail}")
 }
 
