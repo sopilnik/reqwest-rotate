@@ -70,12 +70,13 @@ rate-limited, retrying client with sane timeouts.
 ## What it does
 
 **Proxy rotation.** Round-robin over the list you configure. A proxy that fails to
-connect, times out, drops the connection or answers `407` goes on cooldown and is
-skipped until the cooldown expires or the proxy answers again. A `Retry-After` on
-that `407` is deliberately not honoured, since the wait belongs to the failed proxy,
-not to the server. A per-attempt timeout counts as the proxy's failure, since the
-client cannot tell a stalled proxy from a stalled origin; blaming it is cheap: the
-mark clears the first time the proxy answers again.
+connect, times out, drops the connection or answers `407` to a plain `http://`
+request it forwards itself goes on cooldown and is skipped until the cooldown
+expires or the proxy answers again. A `Retry-After` on that `407` is deliberately
+not honoured, since the wait belongs to the failed proxy, not to the server. A
+per-attempt timeout counts as the proxy's failure, since the client cannot tell a
+stalled proxy from a stalled origin; blaming it is cheap: the mark clears the first
+time the proxy answers again.
 
 If another proxy is out of cooldown the retry goes through it immediately; if none
 is, retries fall back to the backoff. Any other status is the origin's answer: you

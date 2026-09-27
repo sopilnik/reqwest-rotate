@@ -1382,6 +1382,67 @@ async fn https_through_a_proxy_that_refuses_connect_is_a_connect_error() {
     assert!(client.proxies().in_cooldown(&proxy));
 }
 
+/// A SOCKS5 proxy that takes any client without authentication, grants
+/// every `CONNECT`, and then answers the tunnelled HTTP request itself
+/// with `response`, standing in for the origin. Returns the proxy URL and
+/// a counter of accepted connections.
+#[cfg(feature = "socks")]
+async fn socks_origin(response: &'static [u8]) -> (String, Arc<AtomicUsize>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("socks5h://{}", listener.local_addr().unwrap());
+    let connections = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&connections);
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let mut buf = [0u8; 4096];
+            // Greeting: pick "no authentication".
+            if socket.read(&mut buf).await.is_err() {
+                continue;
+            }
+            let _ = socket.write_all(&[5, 0]).await;
+            // CONNECT: grant it with an all-zero bound address.
+            if socket.read(&mut buf).await.is_err() {
+                continue;
+            }
+            let _ = socket.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).await;
+            // The HTTP request itself, answered as the origin.
+            let _ = socket.read(&mut buf).await;
+            let _ = socket.write_all(response).await;
+            let _ = socket.shutdown().await;
+        }
+    });
+    (url, connections)
+}
+
+/// A SOCKS proxy cannot answer in HTTP, so a `407` through one is the
+/// origin's, and the origin already has the `POST`: it comes back as it
+/// is, is not replayed, and the proxy stays healthy.
+#[cfg(feature = "socks")]
+#[tokio::test]
+async fn a_407_through_a_socks_proxy_is_the_origins_answer() {
+    let (proxy, seen) = socks_origin(
+        b"HTTP/1.1 407 Proxy Authentication Required\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+    )
+    .await;
+    let client = quick()
+        .proxies([proxy.as_str()])
+        .retries(1)
+        .build()
+        .unwrap();
+
+    let response = client
+        .request(reqwest::Method::POST, "http://example.invalid/page")
+        .body("x=1")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 407);
+    assert_eq!(seen.load(Ordering::SeqCst), 1);
+    assert!(!client.proxies().in_cooldown(&proxy));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn rotation_holds_up_under_concurrency() {
     let (proxy_a, seen_a) = raw_server(0, OK_RESPONSE).await;

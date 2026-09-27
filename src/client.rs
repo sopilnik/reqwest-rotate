@@ -267,11 +267,18 @@ impl RotatingClient {
                 log_url(current.url()),
                 proxy_idx.map(|idx| inner.proxies.redacted(idx))
             );
+            let plain_http = current.url().scheme() == "http";
 
             match client.execute(current).await {
                 Ok(response) => {
                     let status = response.status();
-                    let blamed_proxy = proxy_idx.filter(|_| is_proxy_failure_status(status));
+                    let blamed_proxy = proxy_idx.filter(|&idx| {
+                        is_proxy_failure_status(
+                            status,
+                            if plain_http { "http" } else { "https" },
+                            &inner.proxies.as_slice()[idx],
+                        )
+                    });
                     match (blamed_proxy, proxy_idx) {
                         (Some(idx), _) => {
                             trace_log!(

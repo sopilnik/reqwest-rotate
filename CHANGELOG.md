@@ -90,6 +90,13 @@ and this project uses [Semantic Versioning](https://semver.org/).
   `GOAWAY(NO_ERROR)` up to twice under each attempt, and replay a
   `POST` with a clonable body by its own rules instead of this
   crate's.
+- A `407` reaching the client through a `CONNECT` tunnel or a SOCKS
+  proxy is now treated as the origin's own answer, not the proxy's:
+  only a proxy that forwards a plain `http://` request itself can
+  produce that status. Before, any `407` seen on an attempt through a
+  proxy was blamed on the proxy, which could replay a `POST` the
+  origin had already received and cool down healthy proxies for an
+  answer they never gave.
 
 ### Migrating from 0.1
 

@@ -64,11 +64,20 @@ pub(crate) fn is_retryable_status(status: StatusCode, idempotent: bool) -> bool 
     }
 }
 
-/// `407 Proxy Authentication Required` is the only status that can come
-/// from the proxy rather than the origin. Everything else belongs to the
-/// caller.
-pub(crate) fn is_proxy_failure_status(status: StatusCode) -> bool {
+/// `407 Proxy Authentication Required` is the proxy's own answer only when
+/// the proxy forwarded the request itself: a plain `http://` target through
+/// an `http://` or `https://` proxy. Through a `CONNECT` tunnel (an
+/// `https://` target) or a SOCKS proxy, a refused handshake surfaces as a
+/// connect error instead, so a `407` status there came from the origin and
+/// belongs to the caller like any other.
+pub(crate) fn is_proxy_failure_status(
+    status: StatusCode,
+    target_scheme: &str,
+    proxy: &str,
+) -> bool {
     status == StatusCode::PROXY_AUTHENTICATION_REQUIRED
+        && target_scheme == "http"
+        && (proxy.starts_with("http://") || proxy.starts_with("https://"))
 }
 
 /// Methods that can be repeated safely when it is unknown whether the
@@ -179,7 +188,8 @@ pub enum RetryReason {
     /// A retryable answer from the origin: `408`, `429`, `503`, or, for
     /// idempotent requests, any other `5xx` except `501` and `505`.
     Status(StatusCode),
-    /// A `407` from the proxy itself; that proxy goes into cooldown.
+    /// A `407` from the proxy itself, on a plain `http://` request it
+    /// forwarded; that proxy goes into cooldown.
     ProxyStatus(StatusCode),
     /// A per-attempt or connect timeout.
     Timeout,
@@ -339,13 +349,22 @@ mod tests {
     }
 
     #[test]
-    fn proxy_failure_status_is_407_only() {
-        assert!(is_proxy_failure_status(
-            StatusCode::PROXY_AUTHENTICATION_REQUIRED
+    fn only_a_forwarding_proxy_can_answer_407() {
+        let s407 = StatusCode::PROXY_AUTHENTICATION_REQUIRED;
+        assert!(is_proxy_failure_status(s407, "http", "http://p:8080/"));
+        assert!(is_proxy_failure_status(s407, "http", "https://p/"));
+        assert!(!is_proxy_failure_status(s407, "https", "http://p:8080/"));
+        assert!(!is_proxy_failure_status(s407, "http", "socks5h://p:1080/"));
+        assert!(!is_proxy_failure_status(
+            StatusCode::FORBIDDEN,
+            "http",
+            "http://p/"
         ));
-        assert!(!is_proxy_failure_status(StatusCode::FORBIDDEN));
-        assert!(!is_proxy_failure_status(StatusCode::NOT_FOUND));
-        assert!(!is_proxy_failure_status(StatusCode::BAD_GATEWAY));
+        assert!(!is_proxy_failure_status(
+            StatusCode::BAD_GATEWAY,
+            "http",
+            "http://p/"
+        ));
     }
 
     #[test]
