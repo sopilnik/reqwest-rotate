@@ -1234,6 +1234,27 @@ mod tests {
         assert_eq!(start.elapsed(), Duration::ZERO);
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn drain_stops_pulling_chunks_once_the_budget_is_spent() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Twice as many one-byte chunks as the budget allows: reading past
+        // the budget would pull all of them instead of stopping at it.
+        let pulled = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&pulled);
+        let items = (0..DRAIN_BUDGET * 2).map(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Ok::<&'static [u8], std::io::Error>(b"x")
+        });
+        let response = Response::from(http::Response::new(reqwest::Body::wrap_stream(
+            futures_util::stream::iter(items),
+        )));
+
+        drain(response, Duration::from_secs(60)).await;
+
+        assert_eq!(pulled.load(Ordering::SeqCst), DRAIN_BUDGET);
+    }
+
     #[test]
     fn log_url_keeps_only_scheme_host_port_path() {
         assert_eq!(

@@ -234,6 +234,17 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn first_call_off_the_millisecond_grid_does_not_wait() {
+        // tokio rounds a timer up to the next millisecond, so off that
+        // grid even a sleep until now would move the paused clock.
+        tokio::time::advance(Duration::from_micros(500)).await;
+        let limiter = RateLimiter::new(Some(Duration::from_millis(500)));
+        let start = Instant::now();
+        limiter.wait("example.com").await;
+        assert_eq!(Instant::now(), start);
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn second_call_waits_out_the_interval() {
         let limiter = RateLimiter::new(Some(Duration::from_millis(500)));
         limiter.wait("example.com").await;
@@ -415,6 +426,34 @@ mod tests {
         limiter.wait("trigger.example").await;
 
         assert_eq!(tracked_hosts(&limiter), 1); // only trigger
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn prune_keeps_a_slot_alive_by_its_release_alone() {
+        let min_interval = Duration::from_secs(60);
+        let old_slot = Instant::now();
+        tokio::time::advance(min_interval * 2).await;
+        let recent_release = Instant::now();
+        let now = recent_release;
+        let cutoff = now.checked_sub(min_interval).unwrap();
+        assert!(old_slot <= cutoff, "test setup: slot must look stale");
+
+        let mut last = HashMap::new();
+        for i in 0..=PRUNE_ABOVE_HOSTS {
+            last.insert(format!("filler-{i}.example"), (now, None));
+        }
+        last.insert(
+            "stale-slot-fresh-release.example".to_string(),
+            (old_slot, Some(recent_release)),
+        );
+        let mut state = State {
+            last,
+            next_prune: None,
+        };
+
+        state.maybe_prune(now, min_interval);
+
+        assert!(state.last.contains_key("stale-slot-fresh-release.example"));
     }
 
     #[tokio::test(start_paused = true)]

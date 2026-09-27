@@ -192,6 +192,38 @@ pub(crate) async fn stalled_503_body_server() -> (String, Arc<Mutex<Option<std::
     (url, second)
 }
 
+/// A server that answers the first request with `503` headers declaring a
+/// `content_len`-byte body, then stalls before sending any of it; every
+/// later request gets `200`.
+pub(crate) async fn stalled_body_of_length_server(content_len: usize) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let mut first = true;
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let mut buf = [0u8; 4096];
+            let _ = socket.read(&mut buf).await;
+            if first {
+                first = false;
+                let head = format!(
+                    "HTTP/1.1 503 Service Unavailable\r\ncontent-length: {content_len}\r\n\r\n"
+                );
+                let _ = socket.write_all(head.as_bytes()).await;
+                tokio::spawn(async move {
+                    let _socket = socket;
+                    std::future::pending::<()>().await;
+                });
+            } else {
+                let _ = socket.write_all(OK_RESPONSE).await;
+            }
+        }
+    });
+    url
+}
+
 /// A server that accepts a connection, reads the request, waits `delay`,
 /// then closes the connection without ever answering: stands in for a
 /// proxy that took the connection but stalled, the way a per-attempt

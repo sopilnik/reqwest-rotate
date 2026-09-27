@@ -523,6 +523,57 @@ mod tests {
     }
 
     #[test]
+    fn pick_index_cursor_wraps_at_len_from_every_start() {
+        for start in 0..3 {
+            let list = list(&["http://a", "http://b", "http://c"]);
+            list.lock().next_index = start;
+            assert!(list.pick_index().is_some());
+            assert_eq!(list.lock().next_index, (start + 1) % 3);
+        }
+    }
+
+    #[test]
+    fn pick_index_cursor_wraps_when_every_proxy_is_cooling_down() {
+        // "c" (the last index) is set up to recover soonest; the write
+        // after it must wrap the cursor back to 0, not grow past `len`.
+        let list = list(&["http://a", "http://b", "http://c"]);
+        let now = Instant::now();
+        {
+            let mut state = list.lock();
+            state.bad_until[0] = Some(now + Duration::from_secs(60));
+            state.bad_until[1] = Some(now + Duration::from_secs(60));
+            state.bad_until[2] = Some(now + Duration::from_secs(10));
+        }
+        assert_eq!(list.pick_index(), Some(2));
+        assert_eq!(list.lock().next_index, 0);
+    }
+
+    #[test]
+    fn pick_index_avoiding_cursor_wraps_at_len() {
+        let list = list(&["http://a", "http://b", "http://c"]);
+        list.lock().next_index = 2;
+        // Cursor at the last index; avoiding "b" still finds "c" at once,
+        // and the wrap after it must land back on 0, not grow past `len`.
+        assert_eq!(list.pick_index_avoiding(&[1]), Some(2));
+        assert_eq!(list.lock().next_index, 0);
+    }
+
+    #[test]
+    fn pick_index_ties_prefer_rotation_order() {
+        let list = list(&["http://a", "http://b"]);
+        // Same cooldown expiry for both: with every proxy cooling down,
+        // "a" comes first in rotation and must stay the fallback pick on
+        // an exact tie, not lose it to "b".
+        let until = Instant::now().checked_add(Duration::from_secs(60)).unwrap();
+        {
+            let mut state = list.lock();
+            state.bad_until[0] = Some(until);
+            state.bad_until[1] = Some(until);
+        }
+        assert_eq!(list.pick(), Some("http://a/"));
+    }
+
+    #[test]
     fn empty_list_has_no_pick() {
         let list = ProxyList::new(Vec::<String>::new()).unwrap();
         assert!(list.is_empty());
@@ -555,6 +606,31 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(!at_spelling.contains("s3cret"), "{at_spelling}");
+    }
+
+    #[test]
+    fn vendor_hint_needs_every_guard_to_agree() {
+        let no_hint = |raw: &str| {
+            let err = ProxyList::new([raw]).unwrap_err();
+            let reason = std::error::Error::source(&err).unwrap().to_string();
+            assert!(
+                !reason.contains("write `host:port:user:pass`"),
+                "{raw:?}: {reason}"
+            );
+        };
+        no_hint("a:1234://p:q"); // has a scheme
+        no_hint("1234:5678:9012:3456@"); // has a `@`
+        no_hint("host:1234:extra"); // not exactly three colons
+        no_hint("2001:db8::1"); // unbracketed IPv6: second field is not a port
+        no_hint("host::extra:more"); // second field is empty, not a port
+        no_hint("::1"); // bare IPv6 loopback: two colons, no port
+
+        // A bracketed IPv6 literal is a valid host:port and never reaches
+        // the hint at all.
+        assert_eq!(
+            ProxyList::new(["[::1]:8080"]).unwrap().as_slice(),
+            ["http://[::1]:8080/"]
+        );
     }
 
     #[test]

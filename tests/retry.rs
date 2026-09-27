@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use common::{
     KEEP_ALIVE_503_BODY_LEN, OK_RESPONSE, big_error_body_server, keep_alive_503_server, quick,
-    raw_server, stalled_503_body_server,
+    raw_server, stalled_503_body_server, stalled_body_of_length_server,
 };
 use reqwest_rotate::{Error, RotatingClient};
 use wiremock::matchers::{method, path};
@@ -164,6 +164,44 @@ async fn a_stalled_error_body_does_not_hold_up_the_retry() {
     assert!(
         waited < Duration::from_secs(10),
         "retry started after {waited:?}"
+    );
+}
+
+#[tokio::test]
+async fn retry_skips_the_drain_for_a_body_one_byte_over_the_budget() {
+    // The drain budget is 64 KiB; one byte over it, the body is skipped
+    // without ever being read.
+    let url = stalled_body_of_length_server(64 * 1024 + 1).await;
+    let client = quick().retries(1).build().unwrap();
+    let start = std::time::Instant::now();
+    let response = client.get(format!("{url}/over")).await.unwrap();
+    assert_eq!(response.status(), 200);
+    // Skipping the drain leaves only the tiny backoff before the retry; a
+    // drained body would hold it for the 250 ms drain floor.
+    assert!(
+        start.elapsed() < Duration::from_millis(200),
+        "retry started after {:?}",
+        start.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn retry_drains_a_body_exactly_at_the_budget() {
+    // Exactly at the budget, the body is still drained, so the retry pays
+    // the drain's own time limit instead of skipping straight to backoff.
+    let url = stalled_body_of_length_server(64 * 1024).await;
+    let client = quick()
+        .retries(1)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .unwrap();
+    let start = std::time::Instant::now();
+    let response = client.get(format!("{url}/at-budget")).await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(
+        start.elapsed() >= Duration::from_millis(200),
+        "retry started after {:?}",
+        start.elapsed()
     );
 }
 
