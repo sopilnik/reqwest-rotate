@@ -256,8 +256,13 @@ pub(crate) fn retry_after(headers: &HeaderMap) -> Option<Duration> {
         .ok()?
         .trim();
 
-    if let Ok(seconds) = value.parse::<u64>() {
-        return Some(Duration::from_secs(seconds));
+    if !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()) {
+        // More digits than a u64 holds still means "longer than any cap".
+        return Some(
+            value
+                .parse::<u64>()
+                .map_or(Duration::MAX, Duration::from_secs),
+        );
     }
 
     let target = httpdate::parse_http_date(value).ok()?;
@@ -389,6 +394,16 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(RETRY_AFTER, HeaderValue::from_static("120"));
         assert_eq!(retry_after(&headers), Some(Duration::from_secs(120)));
+    }
+
+    #[test]
+    fn retry_after_beyond_u64_saturates() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            RETRY_AFTER,
+            HeaderValue::from_static("99999999999999999999"),
+        );
+        assert_eq!(retry_after(&headers), Some(Duration::MAX));
     }
 
     #[test]

@@ -118,6 +118,11 @@ and this project uses [Semantic Versioning](https://semver.org/).
   a bare "not a valid proxy URL", and without its password in the
   error. A blank entry now names itself instead of leaving the proxy
   field empty.
+- A `Retry-After` delta-seconds value with more digits than a `u64`
+  holds is now treated as longer than any cap, and the response is
+  returned instead of retrying early. Before, a value that large
+  failed to parse and fell back to the backoff, as if the header had
+  asked for nothing at all.
 - A `407` reaching the client through a `CONNECT` tunnel or a SOCKS
   proxy is now treated as the origin's own answer, not the proxy's:
   only a proxy that forwards a plain `http://` request itself can
