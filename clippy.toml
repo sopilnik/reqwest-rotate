@@ -1,4 +1,5 @@
 too-many-lines-threshold = 150
 allow-unwrap-in-tests = true
 too-many-arguments-threshold = 3
+cognitive-complexity-threshold = 10
 excessive-nesting-threshold = 5

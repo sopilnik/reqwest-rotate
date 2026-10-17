@@ -66,6 +66,7 @@ unsafe_code = "deny"
 [lints.clippy]
 too_many_lines = "warn"
 too_many_arguments = "warn"
+cognitive_complexity = "warn"
 excessive_nesting = "warn"
 unwrap_used = "warn"
 dbg_macro = "warn"

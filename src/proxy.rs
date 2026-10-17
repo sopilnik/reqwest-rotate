@@ -901,26 +901,33 @@ mod tests {
         assert_eq!(redact_unparsable("user@host://x"), "***@host:***");
     }
 
+    fn invalid_proxy_message(input: &str) -> String {
+        ProxyList::new([input]).unwrap_err().to_string()
+    }
+
     #[test]
-    fn invalid_proxy_errors_redact_credentials() {
-        let message = ProxyList::new(["ftp://user:pass@host:21"])
-            .unwrap_err()
-            .to_string();
+    fn invalid_proxy_error_redacts_credentials_of_unsupported_scheme() {
+        let message = invalid_proxy_message("ftp://user:pass@host:21");
+
         assert!(!message.contains("pass"), "{message}");
         assert!(!message.contains("user:"), "{message}");
         assert!(message.contains("***@"), "{message}");
+    }
 
+    #[test]
+    fn invalid_proxy_error_keeps_the_callers_schemeless_spelling() {
         // A schemeless input must not have the `http://` this function
         // synthesises internally leak into the message: the caller never
         // typed it, so the message should open with their own spelling.
-        let schemeless = ProxyList::new(["not a valid proxy url"])
-            .unwrap_err()
-            .to_string();
-        assert_eq!(schemeless, "invalid proxy: not a valid proxy url");
+        let schemeless = invalid_proxy_message("not a valid proxy url");
 
-        let schemeless_with_credentials = ProxyList::new(["user:s3cret@not a url"])
-            .unwrap_err()
-            .to_string();
+        assert_eq!(schemeless, "invalid proxy: not a valid proxy url");
+    }
+
+    #[test]
+    fn invalid_proxy_error_redacts_credentials_of_schemeless_input() {
+        let schemeless_with_credentials = invalid_proxy_message("user:s3cret@not a url");
+
         assert!(
             !schemeless_with_credentials.contains("s3cret"),
             "{schemeless_with_credentials}"
@@ -929,10 +936,12 @@ mod tests {
             schemeless_with_credentials.starts_with("invalid proxy: ***@"),
             "{schemeless_with_credentials}"
         );
+    }
 
-        let scheme_with_at_in_password = ProxyList::new(["ftp://user:p@ss@host:21"])
-            .unwrap_err()
-            .to_string();
+    #[test]
+    fn invalid_proxy_error_redacts_at_sign_in_password_with_scheme() {
+        let scheme_with_at_in_password = invalid_proxy_message("ftp://user:p@ss@host:21");
+
         assert!(
             !scheme_with_at_in_password.contains("ss@"),
             "{scheme_with_at_in_password}"
@@ -941,10 +950,12 @@ mod tests {
             scheme_with_at_in_password.contains("***@host"),
             "{scheme_with_at_in_password}"
         );
+    }
 
-        let schemeless_with_at_in_password = ProxyList::new(["user:p@ss@host:99999"])
-            .unwrap_err()
-            .to_string();
+    #[test]
+    fn invalid_proxy_error_redacts_at_sign_in_password_without_scheme() {
+        let schemeless_with_at_in_password = invalid_proxy_message("user:p@ss@host:99999");
+
         assert!(
             !schemeless_with_at_in_password.contains("ss@"),
             "{schemeless_with_at_in_password}"
@@ -953,30 +964,47 @@ mod tests {
             schemeless_with_at_in_password.contains("***@host"),
             "{schemeless_with_at_in_password}"
         );
+    }
 
+    #[test]
+    fn invalid_proxy_error_redacts_whole_spelling_when_password_has_question_mark() {
         // A password containing `/`, `?` or `#` makes the URL fail to
         // parse; the authority boundary is then unknown, so the whole
         // spelling up to the last `@` must be redacted, not just the part
         // `redact_userinfo` would have guessed at.
-        let slash_in_password_err = ProxyList::new(["http://user:p?ss@host:3128"]).unwrap_err();
-        let slash_in_password = slash_in_password_err.to_string();
-        assert!(!slash_in_password.contains("p?ss"), "{slash_in_password}");
-        assert_eq!(slash_in_password, "invalid proxy: http://***@host:3128");
+        let question_mark_in_password_err =
+            ProxyList::new(["http://user:p?ss@host:3128"]).unwrap_err();
+        let question_mark_in_password = question_mark_in_password_err.to_string();
+
+        assert!(
+            !question_mark_in_password.contains("p?ss"),
+            "{question_mark_in_password}"
+        );
         assert_eq!(
-            std::error::Error::source(&slash_in_password_err)
+            question_mark_in_password,
+            "invalid proxy: http://***@host:3128"
+        );
+        assert_eq!(
+            std::error::Error::source(&question_mark_in_password_err)
                 .unwrap()
                 .to_string(),
             "not a valid proxy URL"
         );
+    }
 
-        let hash_in_password = ProxyList::new(["user:p#ss@host:3128"])
-            .unwrap_err()
-            .to_string();
+    #[test]
+    fn invalid_proxy_error_redacts_whole_spelling_when_password_has_hash() {
+        let hash_in_password = invalid_proxy_message("user:p#ss@host:3128");
+
         assert!(!hash_in_password.contains("p#ss"), "{hash_in_password}");
         assert!(hash_in_password.contains("***@host:3128"));
+    }
 
+    #[test]
+    fn invalid_proxy_error_leaves_input_without_credentials_alone() {
         // No `@` at all: nothing to redact.
-        let no_credentials = ProxyList::new(["http://"]).unwrap_err().to_string();
+        let no_credentials = invalid_proxy_message("http://");
+
         assert_eq!(no_credentials, "invalid proxy: http://");
     }
 }

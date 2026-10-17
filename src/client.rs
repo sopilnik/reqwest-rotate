@@ -1480,4 +1480,13 @@ mod tests {
             "http://[::1]:8080/p"
         );
     }
+
+    #[test]
+    fn remember_limited_does_not_repeat_a_proxy_already_there() {
+        let mut limited = vec![0];
+
+        remember_limited(&mut limited, Some(0));
+
+        assert_eq!(limited, [0]);
+    }
 }
