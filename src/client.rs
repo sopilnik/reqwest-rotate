@@ -249,26 +249,7 @@ impl RotatingClient {
         let mut limited: Vec<usize> = Vec::new();
 
         loop {
-            let mut is_last_attempt = attempt >= inner.retries;
-            let current = if is_last_attempt {
-                pending
-                    .take()
-                    .expect("request is kept until the last attempt")
-            } else {
-                match pending
-                    .as_ref()
-                    .expect("request is kept until the last attempt")
-                    .try_clone()
-                {
-                    Some(clone) => clone,
-                    None => {
-                        is_last_attempt = true;
-                        pending
-                            .take()
-                            .expect("request is kept until the last attempt")
-                    }
-                }
-            };
+            let (current, is_last_attempt) = take_request(&mut pending, attempt, inner.retries);
 
             inner
                 .rate_limiter
@@ -280,101 +261,37 @@ impl RotatingClient {
                 Some(idx) => &inner.proxy_clients[idx],
                 None => &inner.direct_client,
             };
+
             trace_log!(
                 "attempt {attempt} url={} proxy={:?}",
                 log_url(current.url()),
                 proxy_idx.map(|idx| inner.proxies.redacted(idx))
             );
-            let plain_http = current.url().scheme() == "http";
+
             // Only an on_retry hook reads it: no allocation without one.
             let host = inner
                 .on_retry
                 .as_ref()
                 .and(current.url().host_str())
                 .map(str::to_owned);
+            let facts = AttemptFacts {
+                inner,
+                number: attempt,
+                proxy_idx,
+                host,
+                scheme: target_scheme(current.url()),
+                idempotent,
+                is_last_attempt,
+            };
 
-            match client.execute(current).await {
-                Ok(response) => {
-                    let status = response.status();
-                    let blamed_proxy = proxy_idx.filter(|&idx| {
-                        is_proxy_failure_status(
-                            status,
-                            if plain_http { "http" } else { "https" },
-                            &inner.proxies.as_slice()[idx],
-                        )
-                    });
-                    match (blamed_proxy, proxy_idx) {
-                        (Some(idx), _) => {
-                            trace_log!(
-                                "proxy {} answered {status}: cooling it down",
-                                inner.proxies.redacted(idx)
-                            );
-                            inner.proxies.mark_bad_index(idx, inner.proxy_cooldown);
-                        }
-                        // Any other status is the origin's answer, which means this proxy
-                        // forwarded the request: it works, whatever an older failure said.
-                        (None, Some(idx)) => inner.proxies.mark_good_index(idx),
-                        _ => {}
-                    }
-                    if is_last_attempt
-                        || !(blamed_proxy.is_some() || is_retryable_status(status, idempotent))
-                    {
-                        return Ok(response);
-                    }
+            let step = match client.execute(current).await {
+                Ok(response) => on_response(facts, response, &mut limited),
+                Err(err) => on_error(facts, err, &limited),
+            };
 
-                    let Some(delay) = status_delay(
-                        inner,
-                        attempt,
-                        status,
-                        proxy_idx,
-                        blamed_proxy,
-                        &mut limited,
-                        response.headers(),
-                    ) else {
-                        return Ok(response);
-                    };
-                    let reason = if blamed_proxy.is_some() {
-                        RetryReason::ProxyStatus(status)
-                    } else {
-                        RetryReason::Status(status)
-                    };
-                    notify_retry(inner, attempt, reason, proxy_idx, host, delay);
-                    trace_log!("retrying after {delay:?}, status={status}");
-                    // `delay` is at most `MAX_DURATION`, so this cannot overflow.
-                    let wake = tokio::time::Instant::now() + delay;
-                    drain(response, delay.max(DRAIN_TIME_FLOOR)).await;
-                    if tokio::time::Instant::now() < wake {
-                        tokio::time::sleep_until(wake).await;
-                    }
-                }
-                Err(err) => {
-                    // A transport failure seen through a proxy is the
-                    // proxy's fault, whether or not this request can be
-                    // retried.
-                    let blamed_proxy = proxy_idx.filter(|_| is_transport_error(&err));
-                    if let Some(idx) = blamed_proxy {
-                        trace_log!(
-                            "proxy {} failed ({}): cooling it down",
-                            inner.proxies.redacted(idx),
-                            error_kind(&err)
-                        );
-                        inner.proxies.mark_bad_index(idx, inner.proxy_cooldown);
-                    }
-                    if is_last_attempt || !should_retry_error(&err, idempotent) {
-                        return Err(Error::Reqwest(err));
-                    }
-
-                    let delay = if let Some(idx) = blamed_proxy {
-                        switch_delay(inner, attempt, idx, &limited)
-                    } else {
-                        backoff_delay(attempt, inner.backoff_base, inner.backoff_max)
-                    };
-                    notify_retry(inner, attempt, retry_reason(&err), proxy_idx, host, delay);
-                    trace_log!("retrying after {delay:?} ({} error)", error_kind(&err));
-                    if !delay.is_zero() {
-                        tokio::time::sleep(delay).await;
-                    }
-                }
+            match step {
+                Step::Done(result) => return result,
+                Step::Retry { delay, response } => pause(delay, response).await,
             }
 
             attempt = attempt.saturating_add(1);
@@ -520,91 +437,365 @@ impl RequestBuilder {
     }
 }
 
-/// Delay before retrying a retryable `status`, or `None` when the
-/// server's `Retry-After` asks for more than `max_retry_after` and the
-/// response goes back to the caller instead. A `429` that switches
-/// proxies also adds this proxy to `limited`.
-fn status_delay(
-    inner: &Inner,
-    attempt: u32,
-    status: StatusCode,
+/// What one attempt of the retry loop knows before the request goes out.
+struct AttemptFacts<'a> {
+    inner: &'a Inner,
+    number: u32,
     proxy_idx: Option<usize>,
+    host: Option<String>,
+    scheme: &'static str,
+    idempotent: bool,
+    is_last_attempt: bool,
+}
+
+impl AttemptFacts<'_> {
+    /// The usual backoff before the next attempt.
+    fn backoff(&self) -> Duration {
+        backoff_delay(self.number, self.inner.backoff_base, self.inner.backoff_max)
+    }
+}
+
+/// What came back from the attempt.
+struct Answer<'a> {
+    status: StatusCode,
     blamed_proxy: Option<usize>,
-    limited: &mut Vec<usize>,
-    headers: &reqwest::header::HeaderMap,
-) -> Option<Duration> {
-    if let Some(idx) = blamed_proxy {
-        return Some(switch_delay(inner, attempt, idx, limited));
-    }
-    let switch_from = proxy_idx.filter(|&idx| {
-        inner.switch_proxy_on_429 && status == StatusCode::TOO_MANY_REQUESTS && {
-            if !limited.contains(&idx) {
-                limited.push(idx);
-            }
-            inner.proxies.any_healthy_outside(limited)
+    headers: &'a reqwest::header::HeaderMap,
+}
+
+impl Answer<'_> {
+    fn reason(&self) -> RetryReason {
+        if self.blamed_proxy.is_some() {
+            RetryReason::ProxyStatus(self.status)
+        } else {
+            RetryReason::Status(self.status)
         }
-    });
-    if let Some(_idx) = switch_from {
-        trace_log!(
-            "proxy {} answered 429: switching to another proxy without waiting",
-            inner.proxies.redacted(_idx)
-        );
-        return Some(Duration::ZERO);
     }
-    let asked = retry_after(headers);
+}
+
+/// What the retry loop does once an attempt is over.
+enum Step {
+    /// The call is over: this is its result.
+    Done(Result<Response, Error>),
+    /// Wait `delay`, then make the next attempt. `response` is the answer
+    /// being retried, whose body is drained during the wait.
+    Retry {
+        delay: Duration,
+        response: Option<Response>,
+    },
+}
+
+/// Takes the request for one attempt out of `pending`: a clone while
+/// attempts remain, the original on the last one. A body that cannot be
+/// cloned makes this the last attempt as well. Returns the request and
+/// whether this is the last attempt.
+fn take_request(pending: &mut Option<Request>, attempt: u32, retries: u32) -> (Request, bool) {
+    const KEPT: &str = "request is kept until the last attempt";
+
+    let is_last_attempt = attempt >= retries;
+    let clone = if is_last_attempt {
+        None
+    } else {
+        pending.as_ref().expect(KEPT).try_clone()
+    };
+
+    match clone {
+        Some(clone) => (clone, false),
+        None => (pending.take().expect(KEPT), true),
+    }
+}
+
+/// The scheme [`is_proxy_failure_status`] judges a target by: `http`, or
+/// `https` for every other URL.
+fn target_scheme(url: &reqwest::Url) -> &'static str {
+    if url.scheme() == "http" {
+        "http"
+    } else {
+        "https"
+    }
+}
+
+/// Settles an attempt that got an answer: the answer goes back to the
+/// caller, or the attempt is retried after a delay.
+fn on_response(facts: AttemptFacts, response: Response, limited: &mut Vec<usize>) -> Step {
+    let status = response.status();
+    let answer = Answer {
+        status,
+        blamed_proxy: blamed_by_status(&facts, status),
+        headers: response.headers(),
+    };
+
+    record_outcome(&facts, &answer);
+
+    if facts.is_last_attempt
+        || !(answer.blamed_proxy.is_some() || is_retryable_status(status, facts.idempotent))
+    {
+        return Step::Done(Ok(response));
+    }
+
+    remember_limited(limited, proxy_to_leave(&facts, &answer));
+
+    let route = route(&facts, &answer, limited);
+
+    let Some(delay) = status_delay(&facts, &answer, route) else {
+        return Step::Done(Ok(response));
+    };
+
+    notify_retry(facts, answer.reason(), delay);
+    trace_log!("retrying after {delay:?}, status={status}");
+
+    Step::Retry {
+        delay,
+        response: Some(response),
+    }
+}
+
+/// Settles an attempt that failed: the error goes back to the caller, or
+/// the attempt is retried after a delay.
+fn on_error(facts: AttemptFacts, err: reqwest::Error, limited: &[usize]) -> Step {
+    let blamed_proxy = blamed_by_error(&facts, &err);
+
+    cool_down_failed(&facts, blamed_proxy, &err);
+
+    if facts.is_last_attempt || !should_retry_error(&err, facts.idempotent) {
+        return Step::Done(Err(Error::Reqwest(err)));
+    }
+
+    let spare = blamed_proxy.map(|idx| spare_proxy(facts.inner, idx, limited));
+    let delay = error_delay(&facts, spare);
+
+    notify_retry(facts, retry_reason(&err), delay);
+    trace_log!("retrying after {delay:?} ({} error)", error_kind(&err));
+
+    Step::Retry {
+        delay,
+        response: None,
+    }
+}
+
+/// The proxy a transport failure is blamed on, if any.
+fn blamed_by_error(facts: &AttemptFacts, err: &reqwest::Error) -> Option<usize> {
+    // A transport failure seen through a proxy is the proxy's fault,
+    // whether or not this request can be retried.
+    facts.proxy_idx.filter(|_| is_transport_error(err))
+}
+
+/// Cools the proxy blamed for a transport failure down, if there is one.
+fn cool_down_failed(facts: &AttemptFacts, blamed_proxy: Option<usize>, _err: &reqwest::Error) {
+    let Some(idx) = blamed_proxy else {
+        return;
+    };
+
+    let inner = facts.inner;
+
+    trace_log!(
+        "proxy {} failed ({}): cooling it down",
+        inner.proxies.redacted(idx),
+        error_kind(_err)
+    );
+    inner.proxies.mark_bad_index(idx, inner.proxy_cooldown);
+}
+
+/// Delay before retrying after a transport failure: the switch delay when
+/// a proxy was blamed, the usual backoff otherwise.
+fn error_delay(facts: &AttemptFacts, spare: Option<Spare>) -> Duration {
+    match spare {
+        Some(spare) => switch_delay(facts, spare),
+        None => facts.backoff(),
+    }
+}
+
+/// The proxy that answered with its own failure status, if any.
+fn blamed_by_status(facts: &AttemptFacts, status: StatusCode) -> Option<usize> {
+    facts.proxy_idx.filter(|&idx| {
+        is_proxy_failure_status(status, facts.scheme, &facts.inner.proxies.as_slice()[idx])
+    })
+}
+
+/// Cools the blamed proxy down, or marks the proxy that carried the
+/// request good.
+fn record_outcome(facts: &AttemptFacts, answer: &Answer) {
+    let proxies = &facts.inner.proxies;
+
+    match (answer.blamed_proxy, facts.proxy_idx) {
+        (Some(idx), _) => {
+            trace_log!(
+                "proxy {} answered {}: cooling it down",
+                proxies.redacted(idx),
+                answer.status
+            );
+            proxies.mark_bad_index(idx, facts.inner.proxy_cooldown);
+        }
+        // Any other status is the origin's answer, which means this proxy
+        // forwarded the request: it works, whatever an older failure said.
+        (None, Some(idx)) => proxies.mark_good_index(idx),
+        _ => {}
+    }
+}
+
+/// The proxy a `429` should move this call away from, when switching
+/// proxies on `429` is on. None when a proxy is blamed for the answer.
+fn proxy_to_leave(facts: &AttemptFacts, answer: &Answer) -> Option<usize> {
+    facts.proxy_idx.filter(|_| {
+        answer.blamed_proxy.is_none()
+            && facts.inner.switch_proxy_on_429
+            && answer.status == StatusCode::TOO_MANY_REQUESTS
+    })
+}
+
+/// Adds the proxy being left to `limited`, unless it is already there.
+fn remember_limited(limited: &mut Vec<usize>, leaving: Option<usize>) {
+    if let Some(idx) = leaving.filter(|idx| !limited.contains(idx)) {
+        limited.push(idx);
+    }
+}
+
+/// Where the next attempt goes after a retryable answer.
+enum Route {
+    /// A proxy is blamed for the answer.
+    Blamed(Spare),
+    /// A `429` moves this call away from the proxy `idx`.
+    Leave { idx: usize, spare: Spare },
+    /// The answer does not move the call to another proxy.
+    Stay,
+}
+
+/// Reads the proxy health the delay after `answer` depends on.
+fn route(facts: &AttemptFacts, answer: &Answer, limited: &[usize]) -> Route {
+    let inner = facts.inner;
+
+    if let Some(idx) = answer.blamed_proxy {
+        return Route::Blamed(spare_proxy(inner, idx, limited));
+    }
+
+    let Some(idx) = proxy_to_leave(facts, answer) else {
+        return Route::Stay;
+    };
+
+    Route::Leave {
+        idx,
+        spare: Spare::from(inner.proxies.any_healthy_outside(limited)),
+    }
+}
+
+/// Delay before retrying a retryable answer, or `None` when the
+/// server's `Retry-After` asks for more than `max_retry_after` and the
+/// response goes back to the caller instead.
+fn status_delay(facts: &AttemptFacts, answer: &Answer, route: Route) -> Option<Duration> {
+    match route {
+        Route::Blamed(spare) => Some(switch_delay(facts, spare)),
+        Route::Leave {
+            idx: _idx,
+            spare: Spare::Ready,
+        } => {
+            trace_log!(
+                "proxy {} answered 429: switching to another proxy without waiting",
+                facts.inner.proxies.redacted(_idx)
+            );
+
+            Some(Duration::ZERO)
+        }
+        Route::Leave { .. } | Route::Stay => server_delay(facts, answer),
+    }
+}
+
+/// Delay a `Retry-After` header asks for, or the usual backoff without one;
+/// `None` when the header asks for more than `max_retry_after`.
+fn server_delay(facts: &AttemptFacts, answer: &Answer) -> Option<Duration> {
+    let asked = retry_after(answer.headers);
+
     match asked {
-        Some(asked) if asked > inner.max_retry_after => {
-            trace_log!("server asked to wait {asked:?}, above max_retry_after: returning {status}");
+        Some(asked) if asked > facts.inner.max_retry_after => {
+            trace_log!(
+                "server asked to wait {asked:?}, above max_retry_after: returning {}",
+                answer.status
+            );
+
             None
         }
-        _ => Some(response_delay(
-            asked,
-            backoff_delay(attempt, inner.backoff_base, inner.backoff_max),
-        )),
+        _ => Some(response_delay(asked, facts.backoff())),
     }
 }
 
 /// Tells the `on_retry` hook, if any, about the retry that is about to
 /// happen.
-fn notify_retry(
-    inner: &Inner,
-    attempt: u32,
-    reason: RetryReason,
-    proxy_idx: Option<usize>,
-    host: Option<String>,
-    delay: Duration,
-) {
+fn notify_retry(attempt: AttemptFacts, reason: RetryReason, delay: Duration) {
+    let inner = attempt.inner;
+
     if let Some(hook) = &inner.on_retry {
         hook(&RetryEvent {
-            attempt,
+            attempt: attempt.number,
             reason,
-            proxy: proxy_idx.map(|idx| inner.proxies.redacted(idx)),
-            host,
+            proxy: attempt.proxy_idx.map(|idx| inner.proxies.redacted(idx)),
+            host: attempt.host,
             delay,
         });
     }
 }
 
-/// Delay before the next attempt after blaming proxy `idx` for this one.
-/// Zero when a proxy other than `idx`, and outside `limited` (the proxies
-/// this call already saw answer 429), is out of cooldown, since the
-/// next attempt then lands on different hardware and there is nothing to
-/// wait for; excluding `idx` itself matters at a zero cooldown, where it
-/// would otherwise count as its own healthy alternative. The usual
-/// backoff otherwise, so a lone dead proxy is not hammered back to back
-/// and a limited one is not asked again at once.
-fn switch_delay(inner: &Inner, attempt: u32, idx: usize, limited: &[usize]) -> Duration {
-    let other_healthy = if limited.is_empty() {
-        inner.proxies.any_healthy_except(idx)
-    } else {
-        let mut avoid = limited.to_vec();
-        avoid.push(idx);
-        inner.proxies.any_healthy_outside(&avoid)
-    };
-    if other_healthy {
-        Duration::ZERO
-    } else {
-        backoff_delay(attempt, inner.backoff_base, inner.backoff_max)
+/// Whether another proxy can take the next attempt at once.
+#[derive(Clone, Copy)]
+enum Spare {
+    Ready,
+    Missing,
+}
+
+impl From<bool> for Spare {
+    fn from(is_healthy: bool) -> Self {
+        if is_healthy {
+            Self::Ready
+        } else {
+            Self::Missing
+        }
+    }
+}
+
+/// Whether a proxy other than `idx`, and outside `limited` (the proxies
+/// this call already saw answer 429), is out of cooldown right now.
+/// Excluding `idx` itself matters at a zero cooldown, where it would
+/// otherwise count as its own healthy alternative.
+fn spare_proxy(inner: &Inner, idx: usize, limited: &[usize]) -> Spare {
+    if limited.is_empty() {
+        return Spare::from(inner.proxies.any_healthy_except(idx));
+    }
+
+    let mut avoid = limited.to_vec();
+
+    avoid.push(idx);
+
+    Spare::from(inner.proxies.any_healthy_outside(&avoid))
+}
+
+/// Delay before the next attempt after blaming a proxy for this one. Zero
+/// when a `spare` proxy is ready, since the next attempt then lands on
+/// different hardware and there is nothing to wait for. The usual backoff
+/// otherwise, so a lone dead proxy is not hammered back to back and a
+/// limited one is not asked again at once.
+fn switch_delay(facts: &AttemptFacts, spare: Spare) -> Duration {
+    match spare {
+        Spare::Ready => Duration::ZERO,
+        Spare::Missing => facts.backoff(),
+    }
+}
+
+/// Waits out `delay` before the next attempt; after a retryable answer
+/// the answer's body is drained within that wait.
+async fn pause(delay: Duration, response: Option<Response>) {
+    match response {
+        Some(response) => drain_within(response, delay).await,
+        None if !delay.is_zero() => tokio::time::sleep(delay).await,
+        None => {}
+    }
+}
+
+/// Drains `response` and sleeps out whatever is left of `delay`.
+async fn drain_within(response: Response, delay: Duration) {
+    // `delay` is at most `MAX_DURATION`, so this cannot overflow.
+    let wake = tokio::time::Instant::now() + delay;
+
+    drain(response, delay.max(DRAIN_TIME_FLOOR)).await;
+
+    if tokio::time::Instant::now() < wake {
+        tokio::time::sleep_until(wake).await;
     }
 }
 
