@@ -1,8 +1,10 @@
 //! HTTP/2-specific retry behaviour against a local cleartext `h2` server:
 //! which stream resets get replayed, and how many streams the server
-//! actually saw. `tests/integration.rs` covers HTTP/1 and shares none of
-//! this file's helpers, since here a connection hands out a script of
-//! per-stream actions instead of one fixed byte response.
+//! actually saw. The server is local to this file, since a connection here
+//! hands out a script of per-stream actions instead of one fixed byte
+//! response; only the shared test helpers come from `common`.
+
+mod common;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -31,6 +33,18 @@ enum StreamAction {
     Ok(&'static str),
 }
 
+/// Answers one stream with a `200` carrying `body`.
+fn answer_ok(mut respond: h2::server::SendResponse<Bytes>, body: &'static [u8]) {
+    let response = http::Response::builder()
+        .status(200)
+        .body(())
+        .expect("build the response");
+
+    if let Ok(mut send) = respond.send_response(response, false) {
+        let _ = send.send_data(Bytes::from_static(body), true);
+    }
+}
+
 /// A local HTTP/2 server on a random port, accepting a single TCP
 /// connection: every attempt in a test is expected to reuse it, so a
 /// stream index and a connection index are the same thing here. Each
@@ -39,10 +53,9 @@ enum StreamAction {
 /// `INTERNAL_ERROR`. Returns the base URL and a counter of streams the
 /// server accepted.
 async fn h2_server(script: Vec<StreamAction>) -> (String, Arc<AtomicUsize>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let seen = Arc::new(AtomicUsize::new(0));
+    let (listener, url, seen) = common::bind_counted("http").await;
     let counter = Arc::clone(&seen);
+
     tokio::spawn(async move {
         let Ok((socket, _)) = listener.accept().await else {
             return;
@@ -51,20 +64,18 @@ async fn h2_server(script: Vec<StreamAction>) -> (String, Arc<AtomicUsize>) {
             return;
         };
         let mut script = script.into_iter();
+
         while let Some(Ok((_request, mut respond))) = conn.accept().await {
             counter.fetch_add(1, Ordering::SeqCst);
+
             match script.next() {
                 Some(StreamAction::Reset(reason)) => respond.send_reset(reason),
-                Some(StreamAction::Ok(body)) => {
-                    let response = http::Response::builder().status(200).body(()).unwrap();
-                    if let Ok(mut send) = respond.send_response(response, false) {
-                        let _ = send.send_data(Bytes::from_static(body.as_bytes()), true);
-                    }
-                }
+                Some(StreamAction::Ok(body)) => answer_ok(respond, body.as_bytes()),
                 None => respond.send_reset(Reason::INTERNAL_ERROR),
             }
         }
     });
+
     (url, seen)
 }
 
@@ -217,38 +228,44 @@ async fn refused_stream_exhausts_retries() {
     assert_eq!(seen.load(Ordering::SeqCst), 3);
 }
 
+/// Accepts and drops streams until the client closes the connection.
+async fn drain_streams(conn: &mut h2::server::Connection<tokio::net::TcpStream, Bytes>) {
+    while conn.accept().await.is_some() {}
+}
+
 /// A server whose first connection sends a graceful `GOAWAY(reason,
 /// last_stream_id=0)` before reading a single frame off it, leaving the
 /// request's own stream unprocessed; every later connection answers `200`.
 /// Returns the base URL and a counter of TCP connections accepted, so a
 /// test can tell whether a retry opened a second one.
 async fn goaway_then_ok_server(reason: Reason) -> (String, Arc<AtomicUsize>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let connections = Arc::new(AtomicUsize::new(0));
+    let (listener, url, connections) = common::bind_counted("http").await;
     let counter = Arc::clone(&connections);
+
     tokio::spawn(async move {
         loop {
             let Ok((socket, _)) = listener.accept().await else {
                 break;
             };
-            let n = counter.fetch_add(1, Ordering::SeqCst) + 1;
+
+            let connection_number = counter.fetch_add(1, Ordering::SeqCst) + 1;
+
             let Ok(mut conn) = h2::server::handshake(socket).await else {
                 continue;
             };
-            if n == 1 {
+
+            if connection_number == 1 {
                 conn.abrupt_shutdown(reason);
-                while conn.accept().await.is_some() {}
+                drain_streams(&mut conn).await;
                 continue;
             }
-            while let Some(Ok((_request, mut respond))) = conn.accept().await {
-                let response = http::Response::builder().status(200).body(()).unwrap();
-                if let Ok(mut send) = respond.send_response(response, false) {
-                    let _ = send.send_data(Bytes::from_static(b"ok"), true);
-                }
+
+            while let Some(Ok((_request, respond))) = conn.accept().await {
+                answer_ok(respond, b"ok");
             }
         }
     });
+
     (url, connections)
 }
 

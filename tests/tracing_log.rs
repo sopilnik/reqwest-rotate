@@ -22,7 +22,11 @@ struct SharedBuf(Arc<std::sync::Mutex<Vec<u8>>>);
 
 impl std::io::Write for SharedBuf {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(buf);
+        self.0
+            .lock()
+            .expect("lock the log buffer")
+            .extend_from_slice(buf);
+
         Ok(buf.len())
     }
 

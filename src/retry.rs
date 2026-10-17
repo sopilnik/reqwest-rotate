@@ -252,7 +252,10 @@ pub(crate) fn retry_reason(err: &reqwest::Error) -> RetryReason {
 
 /// Short label for a transport failure, for log lines that must not
 /// carry the error's own text (it embeds the request URL).
-#[cfg_attr(not(feature = "tracing"), allow(dead_code))]
+#[cfg_attr(
+    all(not(test), not(feature = "tracing")),
+    expect(dead_code, reason = "only the tracing events call this")
+)]
 pub(crate) fn error_kind(err: &reqwest::Error) -> &'static str {
     if err.is_timeout() {
         "timeout"

@@ -14,8 +14,13 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 /// on, a plain request to a real server must still succeed. A bare
 /// `reqwest::Client` would pick these up and fail to connect.
 #[tokio::test]
+#[expect(
+    unsafe_code,
+    reason = "std::env::set_var and remove_var are unsafe since edition 2024"
+)]
 async fn env_proxy_variables_are_ignored() {
     let unreachable = "http://127.0.0.1:1";
+
     // SAFETY: nothing else in this process reads the environment while
     // these are set - one test in its own binary, and they are set
     // before it starts a server or a socket. A second test in this
@@ -37,6 +42,7 @@ async fn env_proxy_variables_are_ignored() {
     }
 
     let server = MockServer::start().await;
+
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(200))
         .expect(1)
@@ -48,6 +54,7 @@ async fn env_proxy_variables_are_ignored() {
         .retries(0)
         .build()
         .unwrap();
+
     let response = client.get(server.uri()).await.unwrap();
 
     assert_eq!(response.status(), 200);

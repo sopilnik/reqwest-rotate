@@ -59,3 +59,17 @@ reqwest = { version = "0.13", default-features = false, features = ["stream"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util", "net", "io-util"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 wiremock = "0.6"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+too_many_lines = "warn"
+unwrap_used = "warn"
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+redundant_else = "warn"
+wildcard_imports = "warn"
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"

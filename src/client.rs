@@ -611,15 +611,21 @@ fn switch_delay(inner: &Inner, attempt: u32, idx: usize, limited: &[usize]) -> D
 /// Renders a request URL for log lines: scheme, host, explicit port and
 /// path. Userinfo, query and fragment are dropped; that is where callers
 /// keep their secrets.
-#[cfg_attr(not(feature = "tracing"), allow(dead_code))]
+#[cfg_attr(
+    all(not(test), not(feature = "tracing")),
+    expect(dead_code, reason = "only the tracing events call this")
+)]
 fn log_url(url: &reqwest::Url) -> String {
     use std::fmt::Write;
 
     let mut out = format!("{}://{}", url.scheme(), url.host_str().unwrap_or(""));
+
     if let Some(port) = url.port() {
         let _ = write!(out, ":{port}");
     }
+
     out.push_str(url.path());
+
     out
 }
 

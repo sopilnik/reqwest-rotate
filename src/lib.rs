@@ -24,7 +24,7 @@ pub use retry::{RetryEvent, RetryReason};
 
 /// `tracing::debug!` with the `tracing` feature on, nothing without it, so
 /// call sites need no `#[cfg]` of their own. Helpers that exist only to
-/// feed these call sites carry `allow(dead_code)` for feature-off builds.
+/// feed these call sites carry `expect(dead_code)` for feature-off builds.
 macro_rules! trace_log {
     ($($arg:tt)*) => {
         #[cfg(feature = "tracing")]
