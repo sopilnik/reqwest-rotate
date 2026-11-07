@@ -10,7 +10,19 @@ repository = "https://github.com/sopilnik/reqwest-rotate"
 readme = "README.md"
 keywords = ["reqwest", "proxy", "rate-limit", "retry", "scraping"]
 categories = ["web-programming::http-client", "network-programming"]
-exclude = [".github/", ".gitignore", "deny.toml"]
+include = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "README.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "LICENSE-*",
+    "clippy.toml",
+    "src/**",
+    "tests/**",
+    "examples/**",
+]
 
 [package.metadata.docs.rs]
 all-features = true
