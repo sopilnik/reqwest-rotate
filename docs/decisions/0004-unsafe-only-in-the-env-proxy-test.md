@@ -11,7 +11,8 @@ another thread reading the environment at the same time is undefined behaviour.
 
 ## Decision
 
-`unsafe` is allowed in exactly one place: the block in `tests/env_proxy.rs` that sets and clears those variables.
+`unsafe` is allowed in exactly one place: the block in `tests/env_proxy.rs` that sets the six proxy variables and
+removes `NO_PROXY` and `no_proxy`.
 
 - `src/lib.rs` keeps `#![forbid(unsafe_code)]`, so the library itself can never contain `unsafe`.
 - `Cargo.toml` sets `unsafe_code = "deny"` for the whole package, which covers tests, examples and benches.
@@ -26,10 +27,11 @@ another thread reading the environment at the same time is undefined behaviour.
 - Do not test the behaviour. Rejected: the promise is in the README and a regression would send traffic around the
   configured proxies, which is the failure this crate exists to prevent.
 - Set the variables on a child process instead of the test process. Not needed for one test, and it would add a helper
-  binary or a re-exec of the test executable just to avoid six lines.
+  binary or a re-exec of the test executable just to avoid the single `unsafe` block.
 - Lower the lint to `warn` or allow `unsafe` in all tests. Rejected: it would let new `unsafe` in without a decision.
 
 ## Consequences
 
-The one `unsafe` block is easy to find and to review. `#[expect]` makes the lint fail if the block ever goes away, so
-the exception cannot outlive its reason.
+The one `unsafe` block is easy to find and to review. If the block ever goes away, the `#[expect]` is no longer
+fulfilled and rustc warns with `unfulfilled_lint_expectations`; CI runs clippy over all targets with `-D warnings`, so
+that warning fails the job and the exception cannot outlive its reason.
