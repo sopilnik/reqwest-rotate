@@ -105,5 +105,5 @@ swaps the TLS library.
 - Request and response bodies: passed through and never logged.
 
 **Secrets.** The crate stores no secret of its own, and the repository holds none either. CI uses only the workflow's
-own `GITHUB_TOKEN`. It is read-only everywhere except the Scorecard job, which may also upload code-scanning results
-(`security-events: write`).
+own `GITHUB_TOKEN`. It is read-only everywhere except the Scorecard and CodeQL jobs, which may also upload code-scanning
+results (`security-events: write`).
