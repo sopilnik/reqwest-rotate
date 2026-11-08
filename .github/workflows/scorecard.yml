@@ -2,7 +2,7 @@ name: Scorecard
 
 on:
   push:
-    # The action only supports the default branch.
+    # Scorecard only supports the default branch.
     branches: [main]
   schedule:
     - cron: "41 3 * * 3"
@@ -21,18 +21,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # This is the image scorecard-action v2.5.0 runs, taken by digest
-      # because the tag it names on the registry can be moved. A docker://
-      # step skips the action's input defaults, so they are passed here.
-      # Results are not published to the Scorecard API: that serves the
-      # badge and the public API, not code scanning, and it would also
-      # need id-token: write.
+      # The image scorecard-action v2.5.0 runs, pinned by digest because its
+      # tag can be moved. Dependabot does not update it: docs/decisions/0006.
       - uses: docker://ghcr.io/ossf/scorecard-action@sha256:1e1481c65fc2407d3fd6ab18a23c741eb4d1c0d9359ebafc4b3ab13aa61d8627 # v2.5.0
+        # A docker:// step skips the action's input defaults, so the inputs
+        # this run reads are passed.
         with:
           results_file: results.sarif
           results_format: sarif
           repo_token: ${{ github.token }}
           internal_default_token: ${{ github.token }}
+          # Publishing feeds the badge and the public Scorecard API, not code
+          # scanning, and would need id-token: write.
           publish_results: false
           file_mode: archive
       - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
