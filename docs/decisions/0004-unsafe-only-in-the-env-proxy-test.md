@@ -5,9 +5,10 @@ Status: accepted
 ## Context
 
 The library promises to ignore `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and their lowercase forms, so a client built
-without proxies never routes through whatever the environment names. The only way to test that is to set those
-variables in the test process. Since edition 2024, `std::env::set_var` and `std::env::remove_var` are `unsafe`, because
-another thread reading the environment at the same time is undefined behaviour.
+without proxies never routes through whatever the environment names. Testing that means setting those variables in a
+process that builds a client; the simplest such process is the test itself. Since edition 2024, `std::env::set_var`
+and `std::env::remove_var` are `unsafe`, because another thread reading the environment at the same time is undefined
+behaviour.
 
 ## Decision
 

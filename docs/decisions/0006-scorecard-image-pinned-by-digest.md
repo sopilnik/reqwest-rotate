@@ -18,9 +18,10 @@ under the comment `TODO: Support Docker references and path references`.
 
 The workflow runs the image directly: `uses: docker://ghcr.io/ossf/scorecard-action@sha256:<digest> # v2.5.0`. The
 digest is the manifest digest the registry returns for the `v2.5.0` tag. A `docker://` step does not apply the defaults
-of `action.yaml`, so the step passes each input the image reads on this run (`results_file`, `results_format`,
-`repo_token`, `internal_default_token`, `publish_results`, `file_mode`). `internal_publish_base_url` is left out: the
-image reads it only when it publishes results, and `publish_results` is `false`.
+of `action.yaml`, so the step passes the inputs the image reads on this run (`results_file`, `results_format`,
+`repo_token`, `publish_results`, `file_mode`), and `internal_default_token` as `action.yaml` would: the image reads it
+only when `repo_token` is empty or results are published, and neither holds here. `internal_publish_base_url` is left
+out: the image reads it only when it publishes results, and `publish_results` is `false`.
 
 Dependabot does not move this pin, so a maintainer does, with a new scorecard-action release:
 
