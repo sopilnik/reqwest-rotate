@@ -9,16 +9,20 @@ and this project uses [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - A proxy entry with an `@` after its host, in a path, query or
-  fragment, is now rejected. `ProxyList::new` took such an entry before,
-  but it never pointed at the proxy that was meant.
+  fragment, is now rejected: `ProxyList::new` took it before, but it
+  never pointed at the proxy that was meant.
 
 ### Fixed
 
-- A malformed proxy entry, such as `user:password@host://x@y` or
-  `user:1234/password@host`, could show its password in the
-  `InvalidProxy` error message, in `Debug` output and in tracing
-  events. Errors now hide everything up to the last `@` unless a valid
-  scheme comes first.
+- A malformed proxy entry, such as `user:password@host://x@y`,
+  `user:1234/password@host` or `user:/password/@x/../y`, could show its
+  password in the `InvalidProxy` error message, in `Debug` output and
+  in tracing events. Errors now hide everything up to the last `@`
+  unless a valid scheme comes first.
+- An entry with extra slashes before the user name, such as
+  `http:///user:password@host`, is still accepted, but could show its
+  password in the `Debug` output of a builder and in an error about its
+  scheme. Both now hide it.
 
 ## [0.2.0] - 2026-09-27
 

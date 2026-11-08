@@ -359,6 +359,9 @@ impl fmt::Debug for ProxyList {
 pub(crate) fn redact_userinfo(url: &str) -> String {
     let url = without_ignored_characters(url);
     let (scheme, rest) = split_scheme(&url);
+    // Slashes before the authority are skipped, as the parser skips them
+    // after a special scheme: `http:///user:pw@host` is user `user`.
+    let rest = rest.trim_start_matches(['/', '\\']);
     // Userinfo can only live in the authority, which ends at the first
     // `/`, `?` or `#`; its separator is the *last* `@` there, because an
     // `@` inside the password is legal input (the url crate escapes it).
@@ -435,28 +438,44 @@ fn split_scheme(url: &str) -> (Option<&str>, &str) {
     }
 }
 
-/// The text as `Url::parse` reads it: leading and trailing control
-/// characters and spaces dropped, tabs and newlines removed anywhere. A
-/// redaction that looked at the raw text would see a different scheme and
-/// authority than the parser did.
+/// The text as `canonical_proxy_url` and `Url::parse` read it: surrounding
+/// whitespace, control characters and spaces dropped, tabs and newlines
+/// removed anywhere. A redaction that looked at the raw text would see a
+/// different scheme and authority than the parser did.
 fn without_ignored_characters(text: &str) -> String {
-    text.trim_matches(|c: char| c <= ' ')
+    text.trim()
+        .trim_matches(|c: char| c <= ' ')
         .chars()
         .filter(|c| !matches!(c, '\t' | '\r' | '\n'))
         .collect()
 }
 
-/// Whether the path, query or fragment holds an `@`. Such an entry is
-/// credentials the parser read as something else (`user:1234/secret@host`
-/// is host `user`, port 1234 and a path), so it never reached the proxy
-/// the caller meant, and the redaction of a stored URL, which looks for
-/// the `@` in the authority only, would show it whole.
-fn has_at_after_authority(url: &reqwest::Url) -> bool {
-    url.path().contains('@')
-        || url.query().is_some_and(|query| query.contains('@'))
-        || url
-            .fragment()
-            .is_some_and(|fragment| fragment.contains('@'))
+/// Whether the entry, as written, holds an `@` after its authority, in a path,
+/// query or fragment. Such an entry is credentials the parser read as
+/// something else (`user:1234/secret@host` is host `user`, port 1234 and a
+/// path), so it never reached the proxy the caller meant, and the redaction of
+/// a stored URL, which looks for the `@` in the authority only, would show it
+/// whole. It is decided on the text, not on the parsed URL: normalisation
+/// drops the segment that carries the `@` from `user:/secret/@x/../y`.
+fn has_at_after_authority(entry: &str, special_scheme: bool) -> bool {
+    let text = without_ignored_characters(entry);
+    let (_, rest) = split_scheme(&text);
+    // The parser skips the slashes that follow a special scheme and ends the
+    // authority at the first of these, a `\` included, so the text is read
+    // the same way.
+    let (rest, delimiters): (&str, &[char]) = if special_scheme {
+        (rest.trim_start_matches(['/', '\\']), &['/', '?', '#', '\\'])
+    } else {
+        (rest, &['/', '?', '#'])
+    };
+    let end = rest.find(delimiters);
+
+    end.is_some_and(|end| rest[end..].contains('@'))
+}
+
+/// The schemes the URL standard calls special, whose authority ends at a `\`.
+fn is_special_scheme(scheme: &str) -> bool {
+    matches!(scheme, "http" | "https" | "ftp" | "ws" | "wss" | "file")
 }
 
 const PERCENT_ENCODE_HINT: &str =
@@ -501,7 +520,7 @@ fn canonical_proxy_url(raw: &str) -> Result<String, Error> {
             Error::invalid_proxy(redact_unparsable(raw), refusal_reason(raw, has_scheme))
         })?;
 
-    if has_at_after_authority(&url) {
+    if has_at_after_authority(&with_scheme, is_special_scheme(url.scheme())) {
         return Err(Error::invalid_proxy(
             redact_unparsable(raw),
             refusal_reason(raw, has_scheme),
@@ -545,17 +564,21 @@ fn accepted_once_delimiters_are_encoded(raw: &str) -> bool {
         return false;
     };
     let (userinfo, host) = rest.split_at(at);
-    if !userinfo.contains(['/', '?', '#']) {
+    // Slashes right after the scheme are a typo the parser skips, not part of
+    // the password; they stay as they are, so the entry is still refused.
+    let password = userinfo.trim_start_matches(['/', '\\']);
+    if !password.contains(['/', '?', '#']) {
         return false;
     }
 
-    let encoded = userinfo
+    let slashes = &userinfo[..userinfo.len() - password.len()];
+    let encoded = password
         .replace('/', "%2F")
         .replace('?', "%3F")
         .replace('#', "%23");
     let fixed = match scheme {
-        Some(scheme) => format!("{scheme}://{encoded}{host}"),
-        None => format!("{encoded}{host}"),
+        Some(scheme) => format!("{scheme}://{slashes}{encoded}{host}"),
+        None => format!("{slashes}{encoded}{host}"),
     };
 
     canonical_proxy_url(&fixed).is_ok()

@@ -889,6 +889,32 @@ fn a_proxy_password_never_shows_up_in_any_text_about_the_entry() {
         "http://user:ab#pw-7f3a9c1e@host:80",
         "socks5://user:ab/pw-7f3a9c1e@host:1080",
         "ftp://user:ab/pw-7f3a9c1e@host:21",
+        "ftp://user:/.pw-7f3a9c1e\u{7f}/@\0/../~:/\0../~",
+        "socks5://user:///pw-7f3a9c1e/://///b@\0\0/%2E.?\0\u{19};#\0/\0/:'///",
+        "user:/pw-7f3a9c1e/@x/../y",
+        "http://user:/pw-7f3a9c1e/@x/../y",
+        "user:/pw-7f3a9c1e@x/../y",
+        "user:/pw-7f3a9c1e/@x/./y",
+        "user:/pw-7f3a9c1e/@x/%2e%2E/y",
+        "user:?pw-7f3a9c1e/@x/../y",
+        "user:#pw-7f3a9c1e/@x/../y",
+        "ht\ntp://user:/pw-7f3a9c1e/@x/../y",
+        "http://user:\\pw-7f3a9c1e/@x/../y",
+        "http://user:1234\\pw-7f3a9c1e@host",
+        "socks5://user:a\\b-pw-7f3a9c1e@host:1080",
+        "\u{a0}http://user:pw-7f3a9c1e@host:80",
+        "\u{85}user:pw-7f3a9c1e@host:80",
+        " \t user:pw-7f3a9c1e@host:80 \n",
+        "http://user:pw-7f3a9c1e\u{ff20}host",
+        "http://user:pw-7f3a9c1e@ho\u{ff20}st",
+        "http://user:pw-7f3a9c1e@%68ost",
+        "HTTP://user:pw-7f3a9c1e@HOST:80",
+        "http:///user:pw-7f3a9c1e@host",
+        "https:////user:pw-7f3a9c1e@host",
+        "socks5:///user:pw-7f3a9c1e@host:1080",
+        "/user:pw-7f3a9c1e@host",
+        "http:///user:a/b-pw-7f3a9c1e@host",
+        "http://\\user:pw-7f3a9c1e@host",
     ];
 
     for entry in entries {
@@ -952,6 +978,14 @@ fn the_percent_encoding_hint_goes_to_entries_it_fixes() -> Result<(), Box<dyn st
         ),
         ("user:pw://x@host:80", "invalid proxy: ***@host:80"),
         ("user:p/w@ss@host:80", "invalid proxy: ***@host:80"),
+        ("user:/pw@x/../y", "invalid proxy: ***@x/../y"),
+        ("user:?pw@x/../y", "invalid proxy: ***@x/../y"),
+        ("user:#pw@x/../y", "invalid proxy: ***@x/../y"),
+        ("http:///user:a/b@host", "invalid proxy: http://***@host"),
+        (
+            "ht\ntp://user:/pw@x/../y",
+            "invalid proxy: http://***@x/../y",
+        ),
     ];
     let plain = [
         ("user:pw@host:99999", "invalid proxy: ***@host:99999"),
@@ -976,6 +1010,12 @@ fn the_percent_encoding_hint_goes_to_entries_it_fixes() -> Result<(), Box<dyn st
         (
             "not a valid proxy url",
             "invalid proxy: not a valid proxy url",
+        ),
+        ("http://user:\\pw@x/./y", "invalid proxy: http://***@x/./y"),
+        ("http://host:80\\p@q", "invalid proxy: http://***@q"),
+        (
+            "socks5:///user:pw@host:1080",
+            "invalid proxy: socks5://***@host:1080",
         ),
     ];
     let socks = [
@@ -1031,4 +1071,101 @@ fn a_percent_encoded_password_is_accepted() {
         list.iter_redacted().collect::<Vec<_>>(),
         ["http://***@host/"]
     );
+}
+
+#[test]
+fn what_the_parser_normalises_is_still_accepted_and_redacted()
+-> Result<(), Box<dyn std::error::Error>> {
+    let entries = [
+        (
+            "http://u:p@host:8080/a/../b",
+            "http://u:p@host:8080/b",
+            "http://***@host:8080/b",
+        ),
+        (
+            "HTTP://U:p@HOST:8080",
+            "http://U:p@host:8080/",
+            "http://***@host:8080/",
+        ),
+        (
+            "\u{a0}u:p@host:8080",
+            "http://u:p@host:8080/",
+            "http://***@host:8080/",
+        ),
+        (
+            " \t u:p@host:8080/a/./b \n",
+            "http://u:p@host:8080/a/b",
+            "http://***@host:8080/a/b",
+        ),
+        (
+            "http://u:p@host:80/%40",
+            "http://u:p@host/%40",
+            "http://***@host/%40",
+        ),
+    ];
+
+    for (entry, stored, shown) in entries {
+        let list = ProxyList::new([entry])?;
+
+        assert_eq!(list.iter().collect::<Vec<_>>(), [stored], "{entry:?}");
+        assert_eq!(
+            list.iter_redacted().collect::<Vec<_>>(),
+            [shown],
+            "{entry:?}"
+        );
+        assert!(!format!("{:?}", RotatingClient::builder().proxies([entry])).contains(":p@"));
+    }
+
+    Ok(())
+}
+
+#[test]
+fn extra_slashes_before_the_user_name_are_accepted_and_hidden()
+-> Result<(), Box<dyn std::error::Error>> {
+    let entries = [
+        (
+            "http:///user:pw@host",
+            "http://user:pw@host/",
+            "http://***@host/",
+        ),
+        ("https:////u:pw@h:443", "https://u:pw@h/", "https://***@h/"),
+        ("//u:pw@h", "http://u:pw@h/", "http://***@h/"),
+        ("HTTP:///u:pw@h", "http://u:pw@h/", "http://***@h/"),
+        (
+            "http://\\user:pw@host",
+            "http://user:pw@host/",
+            "http://***@host/",
+        ),
+        ("/user:pw@host", "http://user:pw@host/", "http://***@host/"),
+        ("\\user:pw@host", "http://user:pw@host/", "http://***@host/"),
+        ("ht\ntp:///u:pw@h", "http://u:pw@h/", "http://***@h/"),
+        ("http:////u:pw@h/p", "http://u:pw@h/p", "http://***@h/p"),
+        ("http:///u:pw@h/../x", "http://u:pw@h/x", "http://***@h/x"),
+    ];
+
+    for (entry, stored, shown) in entries {
+        let list = ProxyList::new([entry])?;
+
+        assert_eq!(list.iter().collect::<Vec<_>>(), [stored], "{entry:?}");
+        assert_eq!(
+            list.iter_redacted().collect::<Vec<_>>(),
+            [shown],
+            "{entry:?}"
+        );
+        for text in texts_about_entry(entry) {
+            assert!(
+                !text.contains("pw"),
+                "{entry:?} shows its password in {text:?}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn an_unsupported_scheme_error_hides_the_password_after_extra_slashes() {
+    let error = ProxyList::new(["ws:///u:pw@h"]).unwrap_err();
+
+    assert_eq!(error.to_string(), "invalid proxy: ws://***@h");
 }
