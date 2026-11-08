@@ -15,14 +15,11 @@ month.
 
 Only the `minimal-versions` job in `.github/workflows/ci.yml` resolves that lockfile, on the nightly it installs, and
 nothing of it is committed: the `Cargo.lock` in the repository is the ordinary one. `CONTRIBUTING.md` does not ask
-anyone to resolve it by hand. A toolchain file that pins a nightly will fix the toolchain part of the resolution on any
-machine; the crates below the direct ones will still follow the registry.
+anyone to resolve it by hand.
 
 ## Alternatives
 
-- Tell contributors to resolve it by hand on whatever `nightly` they have. Rejected: two contributors would compare
-  different lockfiles and neither could tell whether a red run came from the change.
-- Pin a nightly in this change. Rejected: a toolchain file and a date to keep current are a change of their own.
+- Pin a nightly now. Rejected: a toolchain file and a date to keep current deserve their own change.
 
 ## Consequences
 

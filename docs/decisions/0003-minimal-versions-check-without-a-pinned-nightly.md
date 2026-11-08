@@ -1,4 +1,4 @@
-# 0003 The minimal-versions check runs only in CI
+# 0003 The minimal-versions check runs in CI without a pinned nightly
 
 Status: accepted, temporary
 
