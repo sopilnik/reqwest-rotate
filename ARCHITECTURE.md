@@ -7,7 +7,7 @@ when the code changes. Decisions that explain a rule are in `docs/decisions/`, t
 
 ## Module graph
 
-<!-- Kept by hand: no standard command is run for it. An edge is a `use crate::...`, a `crate::` path or one of the
+<!-- Maintained by hand; no tool generates it. An edge is a `use crate::...`, a `crate::` path or one of the
 `pub use` lines of `lib.rs`, in non-test code, that reaches another module of `src/`. The `mod` declarations, links in
 doc comments and the test modules are not edges. -->
 
@@ -28,7 +28,8 @@ to the crate and has no `pub use`; `retry` is private except for the two event t
 ## Where a new piece goes
 
 - A new knob on the client: a field on `RotatingClientBuilder` and on `Inner` in `src/client.rs`, clamped to
-  `MAX_DURATION` if it is a duration, with a test in `tests/` for the behaviour and a line in `CHANGELOG.md`.
+  `MAX_DURATION` if it feeds `Instant` arithmetic (see the invariants below), with a test in `tests/` for the
+  behaviour and a line in `CHANGELOG.md`.
 - A new rule for what is retried: a pure function in `src/retry.rs` that takes a status, a method or an error and
   answers yes or no; `client.rs` only calls it.
 - A new proxy scheme or a new check of the proxy list: `src/proxy.rs`, inside `canonical_proxy_url` or `check_scheme`.
@@ -64,19 +65,17 @@ to the crate and has no `pub use`; `retry` is private except for the two event t
 
 ## Security
 
-The crate is a client library: it holds no secrets of its own, listens on no port and has no users of its own.
+The crate is a client library: it listens on no port and has no users or roles of its own, so it has no access matrix.
 
 **Trust boundaries.**
 - The caller is trusted to supply the proxy list, the request and the configuration; the list is validated and
   canonicalised when it is built, and an invalid entry is an error at `build()`.
 - Everything that comes back over the network is untrusted: response status, headers (`Retry-After` is parsed, and a
-  wait longer than `max_retry_after` is not taken), and bodies. Roughly 64 KiB of an HTTP/1 body is read before a
-  retry, and none of an HTTP/2 body.
+  wait longer than `max_retry_after` is not taken), and bodies. At most about 64 KiB of an HTTP/1 body is read before a
+  retry (nothing when its declared length is larger), and none of an HTTP/2 body.
 - A proxy is trusted with the traffic it is given, and with the credentials in its URL; a plain `http://` or SOCKS proxy
   sees them in the clear.
 - The process environment is not trusted: `HTTP_PROXY` and the other proxy variables are ignored.
-
-**Roles and access matrix.** None. The crate has no authentication and no roles, so there is no matrix to keep.
 
 **Public entry points.** The items re-exported from `src/lib.rs`:
 - `RotatingClient`: `builder`, `get`, `request`, `send`, `execute`, `proxies`.
@@ -92,7 +91,8 @@ The crate is a client library: it holds no secrets of its own, listens on no por
   `as_str`.
 
 Cargo features change what is exposed: `query`, `form`, `json` and `multipart` add the `RequestBuilder` method of the
-same name, `socks` and `native-tls` change which proxies and which TLS library are accepted.
+same name, `socks` adds the `socks4://`, `socks4a://`, `socks5://` and `socks5h://` proxy schemes, and `native-tls`
+swaps the TLS library.
 
 **Classes of data.**
 - Proxy credentials (the userinfo of a proxy URL): redacted in `Debug` output, error messages, `tracing` events and
@@ -104,7 +104,6 @@ same name, `socks` and `native-tls` change which proxies and which TLS library a
 - Headers the caller adds through `configure(..)`: not redacted unless the caller marks the value sensitive.
 - Request and response bodies: passed through and never logged.
 
-**Secrets.** The crate stores none. Proxy credentials passed in by the caller live in memory in the `ProxyList` for the
-life of the client. The crate never writes them out, but the caller can read them back from the list through `pick`,
-`as_slice` and `iter` (see the classes of data). The repository holds no secret; CI uses only the read-only token of the
-workflow.
+**Secrets.** The crate stores no secret of its own, and the repository holds none either. CI uses only the workflow's
+own `GITHUB_TOKEN`. It is read-only everywhere except the Scorecard job, which may also upload code-scanning results
+(`security-events: write`).
