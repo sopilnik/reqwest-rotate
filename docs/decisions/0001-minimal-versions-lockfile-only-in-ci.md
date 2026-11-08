@@ -4,25 +4,28 @@ Status: accepted, temporary
 
 ## Context
 
-The minimal-versions check resolves every direct dependency to the lowest version its requirement allows. The resolver
-flag for that (`-Z direct-minimal-versions`) exists only on nightly Rust. A run that is meant to give the same answer
-tomorrow as today needs a fixed nightly, and the repository has neither a `rust-toolchain.toml` nor a recorded nightly
-date. A floating `nightly` can break for reasons that have nothing to do with this crate.
+To check the version floors in `Cargo.toml`, every direct dependency has to be resolved to the lowest version its
+requirement allows. Cargo can do that only through nightly flags (`-Z direct-minimal-versions` here). The result
+depends on two things: the resolver of the nightly that ran it, and what the registry holds that day, because the flag
+lowers direct dependencies only and every crate below them still resolves to the newest release its requirements
+allow. With no `rust-toolchain.toml` and no recorded nightly date, the same command can give a different lockfile next
+month.
 
 ## Decision
 
-The lowest-versions lockfile is generated only by the `minimal-versions` job in `.github/workflows/ci.yml`, on the
-nightly that job installs. `CONTRIBUTING.md` does not ask contributors to run it. Once a toolchain file pins a nightly,
-the same lockfile can be built on that nightly on any machine.
+Only the `minimal-versions` job in `.github/workflows/ci.yml` resolves that lockfile, on the nightly it installs, and
+nothing of it is committed: the `Cargo.lock` in the repository is the ordinary one. `CONTRIBUTING.md` does not ask
+anyone to resolve it by hand. A toolchain file that pins a nightly will fix the toolchain part of the resolution on any
+machine; the crates below the direct ones will still follow the registry.
 
 ## Alternatives
 
-- Document a local run on a floating `nightly`. Rejected: the result changes with the day, so a red run says nothing
-  about the change under test.
-- Pin a nightly in this change. Rejected: it adds a toolchain file and a date to keep current, which is a change of its
-  own.
+- Tell contributors to resolve it by hand on whatever `nightly` they have. Rejected: two contributors would compare
+  different lockfiles and neither could tell whether a red run came from the change.
+- Pin a nightly in this change. Rejected: a toolchain file and a date to keep current are a change of their own.
 
 ## Consequences
 
-A floor that is too low is found by CI on the pull request, not on the contributor's machine. Decisions 0002 and 0003
-end with the same change.
+A contributor who wants to reproduce a red `minimal-versions` job installs the nightly and the tools that job installs,
+and the lockfile can still differ from CI's if the registry has moved in between. 0003 covers the check that uses this
+lockfile.

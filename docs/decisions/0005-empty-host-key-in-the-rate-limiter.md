@@ -20,6 +20,12 @@ A URL without a host is never `http` or `https`, and `reqwest` refuses every oth
 (`url_bad_scheme`), so a request that reaches the limiter without a host fails before it is sent. The empty slot is
 never used by a request that goes out.
 
+It is used by the requests that fail. `get` and `send` (and so a request made with `request`) build the request first,
+and `reqwest` refuses a URL without a host at that point, so they never reach the limiter. A `Request` built by hand
+without a host and passed to `execute` does: with a rate limit set, it waits its turn on that one slot, `min_interval`
+after the previous such request, and `reqwest` then returns its error, a builder error that is not retried. The delay
+lands only on a call that was going to fail.
+
 ## Alternatives
 
 - Key the limiter by `Option<&str>` and skip the wait for `None`. Rejected: the map would need an owned `Option<String>`
@@ -29,5 +35,7 @@ never used by a request that goes out.
 
 ## Consequences
 
-The hot path keeps its borrowed `&str` key and does not allocate. If `reqwest` ever sent a request without a host, or
-the crate accepted schemes other than `http` and `https`, this decision would have to be revisited.
+The hot path keeps its borrowed `&str` key: looking up a host that is already in the map does not allocate, and only a
+request for a host that is not in the map, its first or its first after the entry was pruned, inserts an owned key. If
+`reqwest` ever sent a request without a host, or the crate accepted schemes other than `http` and `https`, this decision
+would have to be revisited.
