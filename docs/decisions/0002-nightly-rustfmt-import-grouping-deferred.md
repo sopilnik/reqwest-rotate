@@ -12,7 +12,7 @@ and `CONTRIBUTING.md` run is stable rustfmt and ignores the grouping.
 ## Decision
 
 The grouping is kept in review. Running `cargo +nightly fmt --all --check -- --config group_imports=StdExternalCrate`
-on a dated nightly finds exactly one place that breaks it, the `use super::*;` line of the test module in
+with current nightly rustfmt finds exactly one place that breaks it, the `use super::*;` line of the test module in
 `src/retry.rs`. That line is fixed in the change that starts running the check, once a toolchain file pins the nightly.
 
 ## Alternatives
