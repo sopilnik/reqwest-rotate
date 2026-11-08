@@ -13,7 +13,8 @@ use std::time::Duration;
 use h2::Reason;
 use hyper::body::Bytes;
 use reqwest::Version;
-use reqwest_rotate::{Error, RotatingClient, RotatingClientBuilder};
+use reqwest_rotate::{Error, RetryReason, RotatingClient, RotatingClientBuilder};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Builder with tiny backoff, configured to speak HTTP/2 straight away: the
 /// test server below expects the same prior knowledge, with no ALPN or
@@ -228,13 +229,37 @@ async fn refused_stream_exhausts_retries() {
     assert_eq!(seen.load(Ordering::SeqCst), 3);
 }
 
-/// Accepts and drops streams until the client closes the connection.
-async fn drain_streams(conn: &mut h2::server::Connection<tokio::net::TcpStream, Bytes>) {
-    while conn.accept().await.is_some() {}
+/// An empty `SETTINGS` frame: the whole server preface.
+const EMPTY_SETTINGS: [u8; 9] = [0, 0, 0, 0x4, 0, 0, 0, 0, 0];
+
+/// Header of a `GOAWAY` frame on stream 0: an 8-byte payload (last stream
+/// id, then error code), type `0x7`, no flags.
+const GOAWAY_HEADER: [u8; 9] = [0, 0, 8, 0x7, 0, 0, 0, 0, 0];
+
+/// Sends the server preface and `GOAWAY(reason, last_stream_id=0)` by hand
+/// rather than through h2's `abrupt_shutdown`, which closes the socket as
+/// soon as that frame is flushed. Since tokio 1.54 an accepted socket is
+/// writable at once, so that close can land before the client has written
+/// its request; the client's write then fails with a broken pipe and it
+/// never reads the `GOAWAY`. Reading until the client hangs up keeps the
+/// socket open, which makes the `GOAWAY` the first thing the client can
+/// learn, whichever side runs first.
+async fn goaway_and_hold(mut socket: tokio::net::TcpStream, reason: Reason) {
+    let mut frames = EMPTY_SETTINGS.to_vec();
+    frames.extend_from_slice(&GOAWAY_HEADER);
+    frames.extend_from_slice(&0u32.to_be_bytes());
+    frames.extend_from_slice(&u32::from(reason).to_be_bytes());
+
+    if socket.write_all(&frames).await.is_err() {
+        return;
+    }
+
+    let mut sink = [0u8; 1024];
+    while matches!(socket.read(&mut sink).await, Ok(n) if n > 0) {}
 }
 
-/// A server whose first connection sends a graceful `GOAWAY(reason,
-/// last_stream_id=0)` before reading a single frame off it, leaving the
+/// A server whose first connection gets a `GOAWAY(reason,
+/// last_stream_id=0)` before a single frame is read off it, leaving the
 /// request's own stream unprocessed; every later connection answers `200`.
 /// Returns the base URL and a counter of TCP connections accepted, so a
 /// test can tell whether a retry opened a second one.
@@ -250,15 +275,14 @@ async fn goaway_then_ok_server(reason: Reason) -> (String, Arc<AtomicUsize>) {
 
             let connection_number = counter.fetch_add(1, Ordering::SeqCst) + 1;
 
+            if connection_number == 1 {
+                tokio::spawn(goaway_and_hold(socket, reason));
+                continue;
+            }
+
             let Ok(mut conn) = h2::server::handshake(socket).await else {
                 continue;
             };
-
-            if connection_number == 1 {
-                conn.abrupt_shutdown(reason);
-                drain_streams(&mut conn).await;
-                continue;
-            }
 
             while let Some(Ok((_request, respond))) = conn.accept().await {
                 answer_ok(respond, b"ok");
@@ -272,17 +296,23 @@ async fn goaway_then_ok_server(reason: Reason) -> (String, Arc<AtomicUsize>) {
 /// The `GET` half of the pair below: the first connection's
 /// `GOAWAY(NO_ERROR)` leaves the request's own stream unprocessed, so the
 /// retry goes out on a fresh connection. Nothing here depends on the
-/// method, which is what the `POST` test next to it pins.
+/// method, which is what the `POST` test next to it pins. A `GET` is also
+/// replayed after a plain broken pipe, so the retry reason is checked too:
+/// it must be the `GOAWAY` (`NeverSent`), not a transport error.
 #[tokio::test]
 async fn get_is_retried_after_an_unprocessed_goaway() {
     let (url, connections) = goaway_then_ok_server(Reason::NO_ERROR).await;
 
-    let client = quick().retries(1).build().unwrap();
+    let (hook, events) = common::record_retries();
+    let client = quick().retries(1).on_retry(hook).build().unwrap();
     let response = client.get(&url).await.unwrap();
 
     assert_eq!(response.status(), 200);
     assert_eq!(response.text().await.unwrap(), "ok");
     assert_eq!(connections.load(Ordering::SeqCst), 2);
+
+    let reasons: Vec<RetryReason> = events.lock().unwrap().iter().map(|e| e.reason).collect();
+    assert_eq!(reasons, [RetryReason::NeverSent]);
 }
 
 /// Same `GOAWAY(NO_ERROR)`, but for a `POST`: the request's own stream was
@@ -306,6 +336,8 @@ async fn post_is_retried_after_an_unprocessed_goaway() {
 }
 
 /// An error-code `GOAWAY` is an ordinary transport error: no replay for `POST`.
+/// The error must be the remote `GOAWAY(INTERNAL_ERROR)` itself; a broken pipe
+/// would also pass the other asserts without the `GOAWAY` ever being read.
 #[tokio::test]
 async fn post_is_not_retried_after_a_goaway_with_an_error_code() {
     let (url, connections) = goaway_then_ok_server(Reason::INTERNAL_ERROR).await;
@@ -323,4 +355,10 @@ async fn post_is_not_retried_after_a_goaway_with_an_error_code() {
     };
     assert!(!inner.is_timeout(), "{inner}");
     assert_eq!(connections.load(Ordering::SeqCst), 1);
+
+    let h2_err = std::iter::successors(std::error::Error::source(&inner), |e| e.source())
+        .find_map(|e| e.downcast_ref::<h2::Error>())
+        .unwrap_or_else(|| panic!("no h2 error in {inner:?}"));
+    assert!(h2_err.is_go_away() && h2_err.is_remote(), "{h2_err:?}");
+    assert_eq!(h2_err.reason(), Some(Reason::INTERNAL_ERROR));
 }
