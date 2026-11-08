@@ -28,8 +28,10 @@ lands only on a call that was going to fail.
 
 ## Alternatives
 
-- Key the limiter by `Option<&str>` and skip the wait for `None`. Rejected: the map would need an owned `Option<String>`
-  key, which allocates on every request, to handle a case that cannot reach the network.
+- Skip the wait when the URL has no host (`if let Some(host) = current.url().host_str()`). Rejected: the only request
+  it would speed up fails one step later anyway.
+- Give a missing host its own key, with `Option<String>` in place of `String` in the map. Rejected: a lookup would need
+  an owned key, which allocates on every request, and the slot would behave exactly like the empty string's.
 - Return an error for a missing host before waiting. Rejected: `reqwest` already returns the error, with the right
   type, one step later.
 
