@@ -355,19 +355,17 @@ impl fmt::Debug for ProxyList {
 /// Replaces `user:password@` in a proxy URL with `***@` so credentials
 /// never end up in logs, error messages, or `Debug` output, whether or
 /// not the URL has a scheme, and even when the password itself contains
-/// `@`.
+/// `@` or `://`.
 pub(crate) fn redact_userinfo(url: &str) -> String {
-    let (scheme, rest) = match url.split_once("://") {
-        Some((scheme, rest)) => (Some(scheme), rest),
-        None => (None, url),
-    };
+    let url = without_ignored_characters(url);
+    let (scheme, rest) = split_scheme(&url);
     // Userinfo can only live in the authority, which ends at the first
     // `/`, `?` or `#`; its separator is the *last* `@` there, because an
     // `@` inside the password is legal input (the url crate escapes it).
     let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let (authority, tail) = rest.split_at(authority_end);
     let Some((_, host)) = authority.rsplit_once('@') else {
-        return url.to_string();
+        return url;
     };
     match scheme {
         Some(scheme) => format!("{scheme}://***@{host}{tail}"),
@@ -375,21 +373,30 @@ pub(crate) fn redact_userinfo(url: &str) -> String {
     }
 }
 
+/// Redacts a proxy entry as the caller wrote it, which may not have been
+/// checked yet: the redaction of a URL that parses, the worst-case one of
+/// [`redact_unparsable`] for anything else.
+pub(crate) fn redact_entry(raw: &str) -> String {
+    match canonical_proxy_url(raw) {
+        Ok(_) => redact_userinfo(raw),
+        Err(_) => redact_unparsable(raw),
+    }
+}
+
 /// Redacts a proxy spelling that `Url::parse` rejected: the authority's
 /// end is unknown, so everything up to the last `@` is treated as
 /// credentials.
 fn redact_unparsable(raw: &str) -> String {
+    let raw = without_ignored_characters(raw);
     let Some(at) = raw.rfind('@') else {
         // No `@`, but a password can still be in there: the
         // `host:port:user:pass` export many proxy vendors use. Keep the
         // scheme and host, hide everything after them.
-        let (prefix, rest) = match raw.find("://") {
-            Some(p) => raw.split_at(p + 3),
-            None => ("", raw),
-        };
+        let (scheme, rest) = split_scheme(&raw);
+        let prefix = scheme.map_or_else(String::new, |scheme| format!("{scheme}://"));
         return match rest.split_once(':') {
             Some((host, _)) => format!("{prefix}{host}:***"),
-            None => raw.to_string(),
+            None => raw,
         };
     };
     let tail = &raw[at + 1..];
@@ -402,18 +409,65 @@ fn redact_unparsable(raw: &str) -> String {
         }
         _ => tail.to_string(),
     };
-    let prefix = raw
-        .find("://")
-        .filter(|p| *p < at)
-        .map_or("", |p| &raw[..p + 3]);
+    // A scheme is only what comes before the first `://` when it is a valid
+    // one; anything else there, an `@` or a `:` included, is credentials.
+    let prefix = split_scheme(&raw[..at])
+        .0
+        .map_or_else(String::new, |scheme| format!("{scheme}://"));
     format!("{prefix}***@{tail}")
 }
+
+/// Splits `scheme://rest`, but only when what precedes the first `://`
+/// is a valid URL scheme (RFC 3986: a letter, then letters, digits, `+`,
+/// `-` or `.`). Otherwise the whole text is `rest`: a prefix such as
+/// `user:password@host` is userinfo, not a scheme, however many `://` follow.
+fn split_scheme(url: &str) -> (Option<&str>, &str) {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return (None, url);
+    };
+    let mut chars = scheme.chars();
+    let valid = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    if valid {
+        (Some(scheme), rest)
+    } else {
+        (None, url)
+    }
+}
+
+/// The text as `Url::parse` reads it: leading and trailing control
+/// characters and spaces dropped, tabs and newlines removed anywhere. A
+/// redaction that looked at the raw text would see a different scheme and
+/// authority than the parser did.
+fn without_ignored_characters(text: &str) -> String {
+    text.trim_matches(|c: char| c <= ' ')
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\r' | '\n'))
+        .collect()
+}
+
+/// Whether the path, query or fragment holds an `@`. Such an entry is
+/// credentials the parser read as something else (`user:1234/secret@host`
+/// is host `user`, port 1234 and a path), so it never reached the proxy
+/// the caller meant, and the redaction of a stored URL, which looks for
+/// the `@` in the authority only, would show it whole.
+fn has_at_after_authority(url: &reqwest::Url) -> bool {
+    url.path().contains('@')
+        || url.query().is_some_and(|query| query.contains('@'))
+        || url
+            .fragment()
+            .is_some_and(|fragment| fragment.contains('@'))
+}
+
+const PERCENT_ENCODE_HINT: &str =
+    "not a valid proxy URL; percent-encode `/`, `?` and `#` in the password (`%2F`, `%3F`, `%23`)";
 
 /// Validates a proxy URL and brings it into the canonical form `reqwest`
 /// expects: lowercase scheme and host, default port dropped, trailing `/`.
 ///
 /// Accepts `scheme://[user:pass@]host[:port]` for the supported schemes,
 /// and a bare `[user:pass@]host[:port]`, which gets `http://` prepended.
+/// An `@` after the host, in a path, query or fragment, is refused.
 fn canonical_proxy_url(raw: &str) -> Result<String, Error> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -444,23 +498,67 @@ fn canonical_proxy_url(raw: &str) -> Result<String, Error> {
         .ok()
         .filter(reqwest::Url::has_host)
         .ok_or_else(|| {
-            let unparsable = redact_unparsable(raw);
-            let vendor_spelling = !has_scheme
-                && !raw.contains('@')
-                && raw.matches(':').count() == 3
-                && raw.split(':').nth(1).is_some_and(|port| {
-                    !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
-                });
-            let reason = if vendor_spelling {
-                "not a valid proxy URL; write `host:port:user:pass` as `http://user:pass@host:port`"
-            } else {
-                "not a valid proxy URL"
-            };
-            Error::invalid_proxy(unparsable, reason)
+            Error::invalid_proxy(redact_unparsable(raw), refusal_reason(raw, has_scheme))
         })?;
+
+    if has_at_after_authority(&url) {
+        return Err(Error::invalid_proxy(
+            redact_unparsable(raw),
+            refusal_reason(raw, has_scheme),
+        ));
+    }
 
     check_scheme(url.scheme(), &shown)?;
     Ok(url.to_string())
+}
+
+/// What to tell the caller about an entry that was refused for its spelling:
+/// a hint when the entry has a known fix, the bare reason otherwise.
+fn refusal_reason(raw: &str, has_scheme: bool) -> &'static str {
+    let vendor_spelling = !has_scheme
+        && !raw.contains('@')
+        && raw.matches(':').count() == 3
+        && raw
+            .split(':')
+            .nth(1)
+            .is_some_and(|port| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()));
+
+    if vendor_spelling {
+        "not a valid proxy URL; write `host:port:user:pass` as `http://user:pass@host:port`"
+    } else if accepted_once_delimiters_are_encoded(raw) {
+        PERCENT_ENCODE_HINT
+    } else {
+        "not a valid proxy URL"
+    }
+}
+
+/// Whether `canonical_proxy_url` would accept the entry if the `/`, `?` and
+/// `#` before its last `@` were percent-encoded, which is the fix the hint
+/// names. Testing it by accepting the encoded entry keeps the hint off
+/// entries that would still be refused, for a port out of range or an
+/// unsupported scheme, say. It calls `canonical_proxy_url` again, one level
+/// deep: the encoded entry has no `/`, `?` or `#` left before its last `@`.
+fn accepted_once_delimiters_are_encoded(raw: &str) -> bool {
+    let text = without_ignored_characters(raw);
+    let (scheme, rest) = split_scheme(&text);
+    let Some(at) = rest.rfind('@') else {
+        return false;
+    };
+    let (userinfo, host) = rest.split_at(at);
+    if !userinfo.contains(['/', '?', '#']) {
+        return false;
+    }
+
+    let encoded = userinfo
+        .replace('/', "%2F")
+        .replace('?', "%3F")
+        .replace('#', "%23");
+    let fixed = match scheme {
+        Some(scheme) => format!("{scheme}://{encoded}{host}"),
+        None => format!("{encoded}{host}"),
+    };
+
+    canonical_proxy_url(&fixed).is_ok()
 }
 
 fn check_scheme(scheme: &str, shown: &str) -> Result<(), Error> {

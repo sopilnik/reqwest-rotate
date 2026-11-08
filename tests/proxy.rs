@@ -825,3 +825,210 @@ async fn idle_connections_are_closed_after_the_pool_timeout() {
     assert_eq!(response.status(), 200);
     assert_eq!(connections.load(Ordering::SeqCst), 2);
 }
+
+const PASSWORD: &str = "pw-7f3a9c1e";
+
+fn texts_about_entry(entry: &str) -> Vec<String> {
+    let builder = format!("{:?}", RotatingClient::builder().proxies([entry]));
+    match ProxyList::new([entry]) {
+        Ok(list) => vec![
+            format!("{list:?}"),
+            list.iter_redacted().collect::<Vec<_>>().join(" "),
+            builder,
+        ],
+        Err(error) => {
+            let mut texts = vec![format!("{error:?}"), builder];
+            let mut cause: Option<&dyn std::error::Error> = Some(&error);
+            while let Some(current) = cause {
+                texts.push(current.to_string());
+                cause = current.source();
+            }
+            texts
+        }
+    }
+}
+
+#[test]
+fn a_proxy_password_never_shows_up_in_any_text_about_the_entry() {
+    let entries = [
+        "user:pw-7f3a9c1e@2://@O",
+        "user:pw-7f3a9c1e@\0\0://1@1",
+        "user:pw-7f3a9c1e@a://1@1",
+        "user:pw-7f3a9c1e@a://1@1/path",
+        "user:pw-7f3a9c1e@x@y://z@w",
+        "user:pw-7f3a9c1e@a/b://c@d",
+        "user:pw-7f3a9c1e://x@host:80",
+        "http://user:pw-7f3a9c1e://x@host:80",
+        "http://user:pw-7f3a9c1e@host:80",
+        "http://user:pw-7f3a9c1e@a://1@1",
+        "https://user:pw-7f3a9c1e@a://1@1",
+        "socks5://user:pw-7f3a9c1e@a://1@1",
+        "ftp://user:pw-7f3a9c1e@a://1@1",
+        "ftp://user:pw-7f3a9c1e@host:21",
+        "ft\np://user:pw-7f3a9c1e@host:21",
+        "\u{1}ftp://user:pw-7f3a9c1e@host:21",
+        "user:pw-7f3a9c1e@host:80",
+        "user:pw-7f3a9c1e@host:99999",
+        "user:pw-7f3a9c1e/x@host:80",
+        "user:pw-7f3a9c1e?x@host:80",
+        "user:pw-7f3a9c1e#x@host:80",
+        "host:80:user:pw-7f3a9c1e",
+        "host:80@user:pw-7f3a9c1e",
+        "user:1234/pw-7f3a9c1e@host:80",
+        "user:1234?pw-7f3a9c1e@host:80",
+        "user:1234#pw-7f3a9c1e@host:80",
+        "http://user:1234/pw-7f3a9c1e@host:80",
+        "https://user:1234/pw-7f3a9c1e@host:80",
+        "socks5://user:1234/pw-7f3a9c1e@host:80",
+        "ftp://user:1234/pw-7f3a9c1e@host:80",
+        "http:/user:pw-7f3a9c1e@host",
+        "http:\\\\user:pw-7f3a9c1e@host",
+        "user:80/a/b?c#pw-7f3a9c1e@host",
+        "user:ab/pw-7f3a9c1e@host:80",
+        "user:ab?pw-7f3a9c1e@host:80",
+        "http://user:ab#pw-7f3a9c1e@host:80",
+        "socks5://user:ab/pw-7f3a9c1e@host:1080",
+        "ftp://user:ab/pw-7f3a9c1e@host:21",
+    ];
+
+    for entry in entries {
+        for text in texts_about_entry(entry) {
+            assert!(
+                !text.contains(PASSWORD),
+                "the password of {entry:?} shows up in {text:?}"
+            );
+        }
+    }
+}
+
+const PERCENT_ENCODE_HINT: &str =
+    "not a valid proxy URL; percent-encode `/`, `?` and `#` in the password (`%2F`, `%3F`, `%23`)";
+
+#[test]
+fn an_at_sign_after_the_host_is_refused_and_hidden() {
+    let refused = [
+        ("user:1234/secret@host:80", "invalid proxy: ***@host:80"),
+        ("user:1234?secret@host:80", "invalid proxy: ***@host:80"),
+        ("user:1234#secret@host:80", "invalid proxy: ***@host:80"),
+        (
+            "http://user:1234/secret@host:80",
+            "invalid proxy: http://***@host:80",
+        ),
+        ("http:/user:secret@host", "invalid proxy: ***@host"),
+    ];
+
+    for (entry, message) in refused {
+        let error = ProxyList::new([entry]).unwrap_err();
+        let reason = std::error::Error::source(&error).unwrap().to_string();
+
+        assert_eq!(error.to_string(), message, "{entry}");
+        assert_eq!(reason, PERCENT_ENCODE_HINT, "{entry}");
+    }
+}
+
+#[test]
+fn a_path_without_an_at_sign_is_still_accepted() {
+    let list = ProxyList::new(["http://user:pw@host:8080/some/path?a=b#c"]).unwrap();
+
+    assert_eq!(
+        list.iter().collect::<Vec<_>>(),
+        ["http://user:pw@host:8080/some/path?a=b#c"]
+    );
+}
+
+#[test]
+fn the_percent_encoding_hint_goes_to_entries_it_fixes() -> Result<(), Box<dyn std::error::Error>> {
+    let hinted = [
+        ("user:ab/cd@host:80", "invalid proxy: ***@host:80"),
+        ("user:ab?cd@host:80", "invalid proxy: ***@host:80"),
+        ("user:12/cd@host:80", "invalid proxy: ***@host:80"),
+        (
+            "http://user:ab#cd@host:80",
+            "invalid proxy: http://***@host:80",
+        ),
+        (
+            "https://user:a1/b@host:443",
+            "invalid proxy: https://***@host:443",
+        ),
+        ("user:pw://x@host:80", "invalid proxy: ***@host:80"),
+        ("user:p/w@ss@host:80", "invalid proxy: ***@host:80"),
+    ];
+    let plain = [
+        ("user:pw@host:99999", "invalid proxy: ***@host:99999"),
+        (
+            "http://user:pw@host:99999",
+            "invalid proxy: http://***@host:99999",
+        ),
+        ("user:p@ss@host:99999", "invalid proxy: ***@host:99999"),
+        ("user:ab/cd@host:99999", "invalid proxy: ***@host:99999"),
+        ("user:12/cd@host:99999", "invalid proxy: ***@host:99999"),
+        ("user:ab/cd@", "invalid proxy: ***@"),
+        ("user:1/2@", "invalid proxy: ***@"),
+        (
+            "http://u:1/2@host:abc",
+            "invalid proxy: http://***@host:***",
+        ),
+        (
+            "ftp://user:ab/cd@host:21",
+            "invalid proxy: ftp://***@host:21",
+        ),
+        ("user@host://x", "invalid proxy: ***@host:***"),
+        (
+            "not a valid proxy url",
+            "invalid proxy: not a valid proxy url",
+        ),
+    ];
+    let socks = [
+        (
+            "socks5://user:ab/cd@host:1080",
+            "invalid proxy: socks5://***@host:1080",
+        ),
+        ("socks5h://u:1?y@h:1", "invalid proxy: socks5h://***@h:1"),
+    ];
+
+    for (entry, message) in hinted {
+        assert_refused_with(entry, message, PERCENT_ENCODE_HINT)?;
+    }
+    for (entry, message) in plain {
+        assert_refused_with(entry, message, "not a valid proxy URL")?;
+    }
+    for (entry, message) in socks {
+        let reason = if cfg!(feature = "socks") {
+            PERCENT_ENCODE_HINT
+        } else {
+            "not a valid proxy URL"
+        };
+
+        assert_refused_with(entry, message, reason)?;
+    }
+
+    Ok(())
+}
+
+fn assert_refused_with(
+    entry: &str,
+    message: &str,
+    reason: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let error = ProxyList::new([entry])
+        .err()
+        .ok_or("the entry was accepted")?;
+    let source = std::error::Error::source(&error)
+        .ok_or("the error has no source")?
+        .to_string();
+
+    assert_eq!(error.to_string(), message, "{entry}");
+    assert_eq!(source, reason, "{entry}");
+
+    Ok(())
+}
+
+#[test]
+fn a_percent_encoded_password_is_accepted() {
+    let list = ProxyList::new(["user:ab%2Fcd%3Fe%23f@host:80"]).unwrap();
+
+    assert_eq!(
+        list.iter_redacted().collect::<Vec<_>>(),
+        ["http://***@host/"]
+    );
+}

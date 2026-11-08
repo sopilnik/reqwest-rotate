@@ -906,7 +906,7 @@ impl fmt::Debug for RotatingClientBuilder {
                 "proxies",
                 &proxies
                     .iter()
-                    .map(|url| crate::proxy::redact_userinfo(url))
+                    .map(|url| crate::proxy::redact_entry(url))
                     .collect::<Vec<_>>(),
             )
             .field("proxy_list", proxy_list)

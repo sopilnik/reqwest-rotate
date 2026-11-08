@@ -400,6 +400,20 @@ fn redaction_handles_urls_without_credentials() {
 }
 
 #[test]
+fn redaction_does_not_take_userinfo_for_a_scheme() {
+    assert_eq!(redact_userinfo("user:p@a://1@1"), "***@a://1@1");
+    assert_eq!(redact_unparsable("user:p@a://1@1"), "***@1");
+    assert_eq!(redact_unparsable("ftp://user:p@a://1@1"), "ftp://***@1");
+    assert_eq!(redact_unparsable("user:p://x"), "user:***");
+}
+
+#[test]
+fn redaction_reads_the_text_the_way_the_url_parser_does() {
+    assert_eq!(redact_userinfo("ht\ntp://u:p@h"), "http://***@h");
+    assert_eq!(redact_userinfo("\u{1}http://u:p@h"), "http://***@h");
+}
+
+#[test]
 fn unparsable_redaction_assumes_the_worst() {
     assert_eq!(
         redact_unparsable("http://user:p?ss@host:3128"),
@@ -500,7 +514,7 @@ fn invalid_proxy_error_redacts_whole_spelling_when_password_has_question_mark() 
         std::error::Error::source(&question_mark_in_password_err)
             .unwrap()
             .to_string(),
-        "not a valid proxy URL"
+        PERCENT_ENCODE_HINT
     );
 }
 

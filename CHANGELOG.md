@@ -4,6 +4,22 @@ All notable changes to this crate are documented in this file. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- A proxy entry with an `@` after its host, in a path, query or
+  fragment, is now rejected. `ProxyList::new` took such an entry before,
+  but it never pointed at the proxy that was meant.
+
+### Fixed
+
+- A malformed proxy entry, such as `user:password@host://x@y` or
+  `user:1234/password@host`, could show its password in the
+  `InvalidProxy` error message, in `Debug` output and in tracing
+  events. Errors now hide everything up to the last `@` unless a valid
+  scheme comes first.
+
 ## [0.2.0] - 2026-09-27
 
 ### Added
@@ -193,6 +209,7 @@ Also in this release:
   `socks4a://`, `socks5://` and `socks5h://` proxies, and `tracing`
   emits debug-level events for retries and proxy rotation.
 
+[Unreleased]: https://github.com/sopilnik/reqwest-rotate/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/sopilnik/reqwest-rotate/releases/tag/v0.2.0
 [0.1.1]: https://github.com/sopilnik/reqwest-rotate/releases/tag/v0.1.1
 [0.1.0]: https://github.com/sopilnik/reqwest-rotate/releases/tag/v0.1.0

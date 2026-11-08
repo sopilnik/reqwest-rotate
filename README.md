@@ -115,8 +115,11 @@ Only the proxies you configure are used; `HTTP_PROXY` and friends are ignored.
 `http://`, `https://` and bare `host:port` work out of the box. SOCKS schemes need
 the `socks` feature; without it `build()` rejects them, instead of every request
 failing later. A `host:port:user:pass` line, as vendors export it, is rejected with
-a hint to write `http://user:pass@host:port`. An `http://` or SOCKS proxy gets your
-credentials in the clear, so use `https://` if you do not trust the path to it.
+a hint to write `http://user:pass@host:port`. A `/`, `?` or `#` in a password has to
+be percent-encoded (`%2F`, `%3F`, `%23`); an entry with any of them unencoded is
+rejected, with a hint when encoding them is all it needs to be accepted. An
+`http://` or SOCKS proxy gets your credentials in the clear, so use `https://` if
+you do not trust the path to it.
 
 With proxies set, nothing goes out directly. If every proxy is cooling down, the one
 that comes back first takes the traffic, so one slow origin can pile everything onto
