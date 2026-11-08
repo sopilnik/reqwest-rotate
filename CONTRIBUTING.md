@@ -40,6 +40,17 @@ CI also runs `cargo check --all-features --locked` on Rust 1.85, the minimum sup
 
 On top of that, CI runs the test suite on macOS and Windows, checks every feature on its own and in pairs, checks that the crate still builds with the lowest versions `Cargo.toml` allows for its direct dependencies, and compares the public API with the last release; none of that needs to run locally.
 
+## Fuzzing
+
+`fuzz/` holds two [cargo-fuzz](https://rust-fuzz.github.io/book/cargo-fuzz.html) targets for the proxy list: `proxy_list_new` checks that a list `ProxyList::new` accepts survives a second pass unchanged, and `proxy_credentials` checks that a password in a proxy URL never shows up in the `Debug` output of the list or of the builder, in `iter_redacted()` or in an error. It is a separate crate outside the published package, and it needs nightly Rust and `cargo install cargo-fuzz --locked`. CI does not run it. If you change how proxy entries are parsed or redacted, run each target for a minute or so from the repository root:
+
+```sh
+cargo +nightly fuzz run proxy_list_new -- -max_total_time=60
+cargo +nightly fuzz run proxy_credentials -- -max_total_time=60 -dict=fuzz/proxy_credentials.dict
+```
+
+A crash is saved under `fuzz/artifacts/`; `cargo +nightly fuzz run <target> <that file>` replays it. Turn a crash into a regular test in `tests/` along with the fix.
+
 ## Pull requests
 
 Say what you changed and why, and link the issue, for example `Fixes #123`. Please send unrelated formatting or refactoring as a separate pull request.

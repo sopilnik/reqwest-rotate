@@ -37,6 +37,8 @@ to the crate and has no `pub use`; `retry` is private except for the two event t
 - A new reqwest feature the crate passes through: a feature in `Cargo.toml` that enables the same feature of `reqwest`,
   and a row in the README feature table.
 - A new example: a file in `examples/`; it must build with the default features.
+- A new fuzz target: a file in `fuzz/fuzz_targets/` and a `[[bin]]` entry in `fuzz/Cargo.toml`. The `fuzz/` crate is a
+  workspace of its own, outside the library's build, and is not packaged (`include` in `Cargo.toml` leaves it out).
 
 ## Invariants that span modules
 

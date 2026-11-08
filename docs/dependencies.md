@@ -40,3 +40,11 @@ reconstruction.
 | tokio | 1.53.3 | dev; `macros`, `rt-multi-thread`, `test-util`, `net`, `io-util` on | The test runtime, the paused clock, and the raw TCP and HTTP/2 test servers (`net`, `io-util`). | The `tokio-macros` proc macro (`macros`) | 2026-11-07 |
 | tracing-subscriber | 0.3.23 | dev, default features off; `fmt` on | Capturing the crate's `tracing` output in a test. | none | 2026-11-07 |
 | wiremock | 0.6.5 | dev | The mock origin and proxy servers in the integration tests. | The `serde`, `serde_core`, `serde_json` and `zmij` build scripts | 2026-11-07 |
+
+## Fuzzing
+
+The `fuzz/` crate (`publish = false`, outside the published package, with a `Cargo.lock` of its own) depends on the library by path and on the crate below. It is built only by `cargo fuzz` on a nightly toolchain, and nothing in the published crate's tree changes.
+
+| Name | Version | Kind | Used for | Why this one | Alternative that lost | Build-time code | Checked |
+|---|---|---|---|---|---|---|---|
+| libfuzzer-sys | 0.4.13 | fuzz crate | The `fuzz_target!` entry point and the bundled libFuzzer that `cargo fuzz` links; `arbitrary` comes with it. | It is the engine `cargo fuzz` is built on, and the Rust fuzzer that OpenSSF Scorecard's fuzzing check detects. | AFL.rs and honggfuzz-rs: separate runners and toolchain setups with no use here beyond what `cargo fuzz` already gives. | A build script that compiles libFuzzer's C++ with `cc` (`cc` is already in the library's lock file). The license is `(MIT OR Apache-2.0) AND NCSA`, accepted for the fuzz crate only in [decision 0007](decisions/0007-libfuzzer-sys-license-in-the-fuzz-crate.md). | 2026-11-08 |

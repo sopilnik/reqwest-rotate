@@ -1,0 +1,32 @@
+[package]
+name = "reqwest-rotate-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+# No TLS: the targets only parse proxy URLs. `socks` is on so the SOCKS
+# schemes take the accepting path too.
+reqwest-rotate = { path = "..", default-features = false, features = ["socks"] }
+
+[[bin]]
+name = "proxy_list_new"
+path = "fuzz_targets/proxy_list_new.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proxy_credentials"
+path = "fuzz_targets/proxy_credentials.rs"
+test = false
+doc = false
+bench = false
+
+# Keeps cargo from treating this as a member of a workspace above it, and
+# keeps the root package's lockfile and lint table out of the fuzz build.
+[workspace]
