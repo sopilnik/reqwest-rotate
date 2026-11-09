@@ -1,0 +1,4 @@
+Cargo.lock linguist-generated
+tests/** task-size=exclude
+**/tests.rs task-size=exclude
+fuzz/fuzz_targets/** task-size=exclude
