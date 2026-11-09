@@ -344,6 +344,40 @@ mod tests {
     }
 
     #[test]
+    fn jitter_bits_and_buckets_are_balanced() {
+        const SAMPLES: usize = 100_000;
+        const MANTISSA_BITS: usize = 53;
+        const BUCKETS: usize = 16;
+        // The limits are 6.3 standard deviations for a bit and 6.5 for a
+        // bucket (normal approximation of the binomial). Over the 53 bits
+        // and 16 buckets together a fair source fails about 1.4e-8 of the
+        // runs, roughly once in 70 million.
+        const BIT_TOLERANCE: f64 = 0.01;
+        const BUCKET_TOLERANCE: f64 = 0.08;
+
+        let mut ones = [0usize; MANTISSA_BITS];
+        let mut buckets = [0usize; BUCKETS];
+        for _ in 0..SAMPLES {
+            let sample = jitter_fraction();
+            let bits = (sample * (1u64 << MANTISSA_BITS) as f64) as u64;
+            for (bit, count) in ones.iter_mut().enumerate() {
+                *count += usize::from((bits >> bit) & 1 == 1);
+            }
+            buckets[(sample * BUCKETS as f64) as usize] += 1;
+        }
+
+        for (bit, &count) in ones.iter().enumerate() {
+            let share = count as f64 / SAMPLES as f64;
+            assert!((share - 0.5).abs() < BIT_TOLERANCE, "bit {bit}: {share}");
+        }
+        let expected = SAMPLES as f64 / BUCKETS as f64;
+        for (bucket, &count) in buckets.iter().enumerate() {
+            let off_by = (count as f64 - expected).abs() / expected;
+            assert!(off_by < BUCKET_TOLERANCE, "bucket {bucket}: {count}");
+        }
+    }
+
+    #[test]
     fn idempotent_retries_408_429_and_5xx() {
         for status in [
             StatusCode::REQUEST_TIMEOUT,
