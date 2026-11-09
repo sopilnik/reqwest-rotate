@@ -129,12 +129,13 @@ impl ProxyList {
         self.proxies.iter().map(String::as_str)
     }
 
-    /// All configured proxy URLs, canonicalised and in rotation order, with
-    /// any `user:password@` replaced by `***@`: the same redaction
-    /// [`Debug`](std::fmt::Debug) output and `tracing` events use, safe to
-    /// log or print directly.
+    /// All configured proxies in rotation order as `scheme://host:port/`,
+    /// with `***@` before the host when the URL has a user or a password.
+    /// The path, query and fragment are left out, and so is a default port.
+    /// It is the same form [`Debug`](std::fmt::Debug) output and `tracing`
+    /// events use, safe to log or print directly.
     pub fn iter_redacted(&self) -> impl Iterator<Item = String> + '_ {
-        self.proxies.iter().map(|p| redact_userinfo(p))
+        self.proxies.iter().map(|p| redact_stored(p))
     }
 
     /// Index of `proxy`, accepting either the canonical form or anything
@@ -146,10 +147,11 @@ impl ProxyList {
         })
     }
 
-    /// The proxy at `idx` with any `user:password@` replaced by `***@`,
-    /// for logs and for the proxy field of an `on_retry` event.
+    /// The proxy at `idx` in the redacted form of
+    /// [`iter_redacted`](Self::iter_redacted), for logs and for the proxy
+    /// field of an `on_retry` event.
     pub(crate) fn redacted(&self, idx: usize) -> String {
-        redact_userinfo(&self.proxies[idx])
+        redact_stored(&self.proxies[idx])
     }
 
     /// Picks the next proxy in round-robin order, skipping proxies that are
@@ -334,7 +336,7 @@ impl ProxyList {
 
 impl fmt::Debug for ProxyList {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let redacted: Vec<String> = self.proxies.iter().map(|p| redact_userinfo(p)).collect();
+        let redacted: Vec<String> = self.proxies.iter().map(|p| redact_stored(p)).collect();
         let in_cooldown: Vec<&str> = {
             let state = self.lock();
             let now = Instant::now();
@@ -352,26 +354,46 @@ impl fmt::Debug for ProxyList {
     }
 }
 
-/// Replaces `user:password@` in a proxy URL with `***@` so credentials
-/// never end up in logs, error messages, or `Debug` output, whether or
-/// not the URL has a scheme, and even when the password itself contains
-/// `@`.
-pub(crate) fn redact_userinfo(url: &str) -> String {
-    let (scheme, rest) = match url.split_once("://") {
-        Some((scheme, rest)) => (Some(scheme), rest),
-        None => (None, url),
+/// The one form in which a parsed proxy appears in any text this crate
+/// produces: `scheme://`, then `***@` when the URL has a user or a password,
+/// the host, the port when it is not the scheme's default, and `/`. The path,
+/// query and fragment are never shown: a proxy URL does not use them, and an
+/// entry the parser read differently from how it was meant (a password after
+/// a stray `/`, `?` or `#`) keeps its secret there.
+pub(crate) fn redact_url(url: &reqwest::Url) -> String {
+    let userinfo = if url.username().is_empty() && url.password().is_none() {
+        ""
+    } else {
+        "***@"
     };
-    // Userinfo can only live in the authority, which ends at the first
-    // `/`, `?` or `#`; its separator is the *last* `@` there, because an
-    // `@` inside the password is legal input (the url crate escapes it).
-    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let (authority, tail) = rest.split_at(authority_end);
-    let Some((_, host)) = authority.rsplit_once('@') else {
-        return url.to_string();
-    };
-    match scheme {
-        Some(scheme) => format!("{scheme}://***@{host}{tail}"),
-        None => format!("***@{host}{tail}"),
+    let host = url.host_str().unwrap_or_default();
+    let port = url
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+
+    format!("{}://{userinfo}{host}{port}/", url.scheme())
+}
+
+/// [`redact_url`] for a URL kept as text, which `canonical_proxy_url` has
+/// parsed once already.
+pub(crate) fn redact_stored(url: &str) -> String {
+    match reqwest::Url::parse(url) {
+        Ok(url) => redact_url(&url),
+        Err(_) => redact_unparsable(url),
+    }
+}
+
+/// Redacts a proxy entry as the caller wrote it, which may not have been
+/// checked yet: the redaction of the URL it parses to, the text of the error
+/// that refused it (already redacted, and the same one the caller gets from
+/// `ProxyList::new`), the worst-case redaction of [`redact_unparsable`] for
+/// anything else.
+pub(crate) fn redact_entry(raw: &str) -> String {
+    match canonical_proxy_url(raw) {
+        Ok(canonical) => redact_stored(&canonical),
+        Err(Error::InvalidProxy { proxy, .. }) => proxy,
+        Err(_) => redact_unparsable(raw),
     }
 }
 
@@ -379,41 +401,121 @@ pub(crate) fn redact_userinfo(url: &str) -> String {
 /// end is unknown, so everything up to the last `@` is treated as
 /// credentials.
 fn redact_unparsable(raw: &str) -> String {
+    let raw = without_ignored_characters(raw);
     let Some(at) = raw.rfind('@') else {
         // No `@`, but a password can still be in there: the
         // `host:port:user:pass` export many proxy vendors use. Keep the
         // scheme and host, hide everything after them.
-        let (prefix, rest) = match raw.find("://") {
-            Some(p) => raw.split_at(p + 3),
-            None => ("", raw),
-        };
+        let (scheme, rest) = split_scheme(&raw);
+        let prefix = scheme.map_or_else(String::new, |scheme| format!("{scheme}://"));
         return match rest.split_once(':') {
-            Some((host, _)) => format!("{prefix}{host}:***"),
-            None => raw.to_string(),
+            Some((host, _)) => format!("{prefix}{}:***", without_path(host)),
+            None => format!("{prefix}{}", without_path(rest)),
         };
     };
+    // What follows the last `@` is the host and port as far as the entry has
+    // them. `host:port@user:pass`, as some vendors write it, puts a password
+    // there, so anything after its first `:` that is not a port number is
+    // hidden. A path, query or fragment is never shown, as for a parsed entry.
     let tail = &raw[at + 1..];
-    // `host:port@user:pass`, as some vendors write it: what follows the
-    // last `@` is then no host and port, so anything after its first `:`
-    // that is not a port number is hidden too.
     let tail = match tail.split_once(':') {
         Some((host, port)) if !port.bytes().all(|b| b.is_ascii_digit()) => {
             format!("{host}:***")
         }
         _ => tail.to_string(),
     };
-    let prefix = raw
-        .find("://")
-        .filter(|p| *p < at)
-        .map_or("", |p| &raw[..p + 3]);
+    let tail = without_path(&tail);
+    // A scheme is only what comes before the first `://` when it is a valid
+    // one; anything else there, an `@` or a `:` included, is credentials.
+    let prefix = split_scheme(&raw[..at])
+        .0
+        .map_or_else(String::new, |scheme| format!("{scheme}://"));
     format!("{prefix}***@{tail}")
 }
+
+/// The text up to the first `/`, `?`, `#` or `\`: the host and port of an
+/// entry without its path, query and fragment.
+fn without_path(text: &str) -> &str {
+    text.find(['/', '?', '#', '\\'])
+        .map_or(text, |end| &text[..end])
+}
+
+/// Splits `scheme://rest`, but only when what precedes the first `://`
+/// is a valid URL scheme (RFC 3986: a letter, then letters, digits, `+`,
+/// `-` or `.`). Otherwise the whole text is `rest`: a prefix such as
+/// `user:password@host` is userinfo, not a scheme, however many `://` follow.
+fn split_scheme(url: &str) -> (Option<&str>, &str) {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return (None, url);
+    };
+    let mut chars = scheme.chars();
+    let valid = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    if valid {
+        (Some(scheme), rest)
+    } else {
+        (None, url)
+    }
+}
+
+/// The text as `canonical_proxy_url` and `Url::parse` read it: surrounding
+/// whitespace, control characters and spaces dropped, tabs and newlines
+/// removed anywhere. A redaction that looked at the raw text would see a
+/// different scheme and authority than the parser did.
+fn without_ignored_characters(text: &str) -> String {
+    text.trim()
+        .trim_matches(|c: char| c <= ' ')
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\r' | '\n'))
+        .collect()
+}
+
+/// Whether the entry, as written, holds an `@` after its authority, in a path,
+/// query or fragment. Such an entry is credentials the parser read as
+/// something else (`user:1234/secret@host` is host `user`, port 1234 and a
+/// path), so it never reached the proxy the caller meant. It is decided on
+/// the text, not on the parsed URL: normalisation drops the segment that
+/// carries the `@` from `user:/secret/@x/../y`. `entry` is the text handed to
+/// the parser, so its scheme ends at the first `:`, and `scheme` is the one
+/// the parser found there.
+fn has_at_after_authority(entry: &str, scheme: &str) -> bool {
+    let text = without_ignored_characters(entry);
+    let after_scheme = text.split_once(':').map_or("", |(_, rest)| rest);
+    // The parser skips the slashes that follow a special scheme and ends the
+    // authority at the first of these, a `\` included, so the text is read
+    // the same way. Any other scheme has its `//` and nothing more.
+    let (rest, delimiters): (&str, &[char]) = if is_special_scheme(scheme) {
+        (
+            after_scheme.trim_start_matches(['/', '\\']),
+            &['/', '?', '#', '\\'],
+        )
+    } else {
+        (
+            after_scheme.strip_prefix("//").unwrap_or(after_scheme),
+            &['/', '?', '#'],
+        )
+    };
+    let end = rest.find(delimiters);
+
+    end.is_some_and(|end| rest[end..].contains('@'))
+}
+
+/// The schemes the URL standard calls special, whose authority ends at a `\`.
+fn is_special_scheme(scheme: &str) -> bool {
+    matches!(scheme, "http" | "https" | "ftp" | "ws" | "wss" | "file")
+}
+
+const PERCENT_ENCODE_HINT: &str =
+    "not a valid proxy URL; percent-encode `/`, `?` and `#` in the password (`%2F`, `%3F`, `%23`)";
+const PERCENT_ENCODE_HINT_SPECIAL: &str = "not a valid proxy URL; percent-encode `/`, `?`, `#` and `\\` in the password (`%2F`, `%3F`, `%23`, `%5C`)";
+const SCHEME_HINT: &str = "not a valid proxy URL; a scheme is followed by `://`";
 
 /// Validates a proxy URL and brings it into the canonical form `reqwest`
 /// expects: lowercase scheme and host, default port dropped, trailing `/`.
 ///
 /// Accepts `scheme://[user:pass@]host[:port]` for the supported schemes,
 /// and a bare `[user:pass@]host[:port]`, which gets `http://` prepended.
+/// An `@` after the host, in a path, query or fragment, is refused.
 fn canonical_proxy_url(raw: &str) -> Result<String, Error> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -435,32 +537,165 @@ fn canonical_proxy_url(raw: &str) -> Result<String, Error> {
     };
     // Never interpolate `raw` itself into an error message below: it may
     // carry `user:pass@`, and errors must not surface proxy credentials
-    // any more than Debug output does. Redacting `raw` rather than
-    // `with_scheme` keeps the message in the caller's own spelling. Input
-    // the parser rejects goes through `redact_unparsable` instead, which
-    // assumes the worst about where the credentials end.
-    let shown = redact_userinfo(raw);
+    // any more than Debug output does. Input the parser rejects goes through
+    // `redact_unparsable`, which assumes the worst about where the
+    // credentials end; a URL it accepts is shown by `redact_url`.
     let url = reqwest::Url::parse(&with_scheme)
         .ok()
         .filter(reqwest::Url::has_host)
         .ok_or_else(|| {
-            let unparsable = redact_unparsable(raw);
-            let vendor_spelling = !has_scheme
-                && !raw.contains('@')
-                && raw.matches(':').count() == 3
-                && raw.split(':').nth(1).is_some_and(|port| {
-                    !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
-                });
-            let reason = if vendor_spelling {
-                "not a valid proxy URL; write `host:port:user:pass` as `http://user:pass@host:port`"
-            } else {
-                "not a valid proxy URL"
-            };
-            Error::invalid_proxy(unparsable, reason)
+            Error::invalid_proxy(redact_unparsable(raw), refusal_reason(raw, has_scheme))
         })?;
 
-    check_scheme(url.scheme(), &shown)?;
+    // `http:/host:8080:user:pass` has the scheme of a proxy URL and one slash
+    // too few, and would be read as a host named `http` that never answers.
+    if let Some(name) = scheme_before_one_slash(raw, &url).filter(|_| !has_scheme) {
+        return Err(Error::invalid_proxy(
+            redact_unparsable(raw),
+            scheme_reason(&name),
+        ));
+    }
+
+    if has_at_after_authority(&with_scheme, url.scheme()) {
+        // A user the parser already found is a proxy with credentials, and
+        // nothing to encode would change which one.
+        let reason = if url.username().is_empty() {
+            refusal_reason(raw, has_scheme)
+        } else {
+            "not a valid proxy URL"
+        };
+
+        return Err(Error::invalid_proxy(redact_unparsable(raw), reason));
+    }
+
+    check_scheme(url.scheme(), &redact_url(&url))?;
     Ok(url.to_string())
+}
+
+/// What to tell the caller about an entry that was refused for its spelling:
+/// a hint when the entry has a known fix, the bare reason otherwise.
+fn refusal_reason(raw: &str, has_scheme: bool) -> &'static str {
+    let vendor_spelling = !has_scheme
+        && !raw.contains('@')
+        && raw.matches(':').count() == 3
+        && raw
+            .split(':')
+            .nth(1)
+            .is_some_and(|port| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()));
+
+    if vendor_spelling {
+        "not a valid proxy URL; write `host:port:user:pass` as `http://user:pass@host:port`"
+    } else if !has_scheme && accepted_with_scheme_separator(raw) {
+        SCHEME_HINT
+    } else if let Some(hint) = delimiter_hint(raw) {
+        hint
+    } else {
+        "not a valid proxy URL"
+    }
+}
+
+/// Why an entry that starts with a scheme name and one slash is refused: the
+/// hint only where writing `://` would be the fix.
+fn scheme_reason(name: &str) -> String {
+    if is_supported_scheme(name) {
+        SCHEME_HINT.to_string()
+    } else {
+        format!("unsupported proxy scheme `{name}`")
+    }
+}
+
+/// The name of a supported or special scheme when the entry, which has no
+/// `://`, is that name and a `:` followed by a `/` or a `\`: a scheme followed
+/// by one slash or a backslash, which the parser reads as a bare host of that
+/// name (`http:/1.2.3.4:8080:user:pass`). It is decided on the parsed host, so
+/// the name may be written with a character the host mapping drops or folds
+/// (U+FEFF, U+00AD, U+200B, full-width letters). `http:8080`,
+/// `http:secret@host` and `http-proxy.example:3128` have no slash right after
+/// the name, and `ab@http:/x` has a user: they are not this typo.
+fn scheme_before_one_slash(raw: &str, url: &reqwest::Url) -> Option<String> {
+    let host = url.host_str().unwrap_or_default();
+    let named = is_supported_scheme(host) || is_special_scheme(host);
+    let bare = url.username().is_empty() && url.password().is_none();
+    let text = without_ignored_characters(raw);
+    // The `:` is the one right after the name: `http/a:/b` is a host and a
+    // path, not this typo.
+    let slash = text.split_once(':').is_some_and(|(name, rest)| {
+        !name.contains(['/', '\\', '?', '#']) && rest.starts_with(['/', '\\'])
+    });
+
+    (named && bare && slash).then(|| host.to_string())
+}
+
+/// The schemes the crate accepts.
+fn is_supported_scheme(scheme: &str) -> bool {
+    matches!(
+        scheme,
+        "http" | "https" | "socks4" | "socks4a" | "socks5" | "socks5h"
+    )
+}
+
+/// Whether the entry, which has no `://`, starts with a scheme and a single
+/// `:` and would be accepted with `://` in its place: `http:host:8080`.
+fn accepted_with_scheme_separator(raw: &str) -> bool {
+    let text = without_ignored_characters(raw);
+    let Some((scheme, rest)) = text.split_once(':') else {
+        return false;
+    };
+    // The schemes the crate accepts; any other would be refused for its
+    // scheme with or without the `://`.
+    is_supported_scheme(&scheme.to_ascii_lowercase())
+        && canonical_proxy_url(&format!("{scheme}://{rest}")).is_ok()
+}
+
+/// The hint for an entry that `canonical_proxy_url` would accept if the `/`,
+/// `?` and `#` before its last `@` (and `\` for a special scheme) were
+/// percent-encoded, which is the fix the hint names. Testing it by accepting
+/// the encoded entry keeps the hint off entries that would still be refused,
+/// for a port out of range or an unsupported scheme, say. It calls
+/// `canonical_proxy_url` again, one level deep: the encoded entry has none of
+/// those characters left before its last `@`.
+fn delimiter_hint(raw: &str) -> Option<&'static str> {
+    let text = without_ignored_characters(raw);
+    let (scheme, rest) = split_scheme(&text);
+    let special = scheme.is_none_or(|scheme| is_special_scheme(&scheme.to_ascii_lowercase()));
+    let delimiters: &[char] = if special {
+        &['/', '?', '#', '\\']
+    } else {
+        &['/', '?', '#']
+    };
+    let at = rest.rfind('@')?;
+    let (userinfo, host) = rest.split_at(at);
+    // Slashes right after the scheme are a typo the parser skips, not part of
+    // the password; they stay as they are, so the entry is still refused.
+    let password_start = userinfo
+        .find(|c: char| !matches!(c, '/' | '\\'))
+        .unwrap_or(userinfo.len());
+    let (slashes, password) = userinfo.split_at(password_start);
+    if !password.contains(delimiters) {
+        return None;
+    }
+
+    let encoded = password
+        .replace('/', "%2F")
+        .replace('?', "%3F")
+        .replace('#', "%23");
+    let encoded = if special {
+        encoded.replace('\\', "%5C")
+    } else {
+        encoded
+    };
+    let fixed = match scheme {
+        Some(scheme) => format!("{scheme}://{slashes}{encoded}{host}"),
+        None => format!("{slashes}{encoded}{host}"),
+    };
+
+    canonical_proxy_url(&fixed).ok()?;
+
+    Some(if special {
+        PERCENT_ENCODE_HINT_SPECIAL
+    } else {
+        PERCENT_ENCODE_HINT
+    })
 }
 
 fn check_scheme(scheme: &str, shown: &str) -> Result<(), Error> {
@@ -484,527 +719,4 @@ fn check_scheme(scheme: &str, shown: &str) -> Result<(), Error> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn list(proxies: &[&str]) -> ProxyList {
-        ProxyList::new(proxies).unwrap()
-    }
-
-    #[test]
-    fn round_robin_cycles_through_all_proxies() {
-        let list = list(&["http://a", "http://b", "http://c"]);
-        assert_eq!(list.pick(), Some("http://a/"));
-        assert_eq!(list.pick(), Some("http://b/"));
-        assert_eq!(list.pick(), Some("http://c/"));
-        assert_eq!(list.pick(), Some("http://a/"));
-    }
-
-    #[test]
-    fn pick_index_wraps_around_skipping_a_cooled_down_proxy() {
-        let list = list(&["http://a", "http://b", "http://c"]);
-        list.mark_bad("http://b", Duration::from_secs(60));
-        // More picks than proxies, over two full laps and one more: each
-        // lap must skip "b" every time it comes up, not just the first.
-        let picks: Vec<&str> = (0..7).map(|_| list.pick().unwrap()).collect();
-        assert_eq!(
-            picks,
-            [
-                "http://a/",
-                "http://c/",
-                "http://a/",
-                "http://c/",
-                "http://a/",
-                "http://c/",
-                "http://a/",
-            ]
-        );
-    }
-
-    #[test]
-    fn pick_index_cursor_wraps_at_len_from_every_start() {
-        for start in 0..3 {
-            let list = list(&["http://a", "http://b", "http://c"]);
-            list.lock().next_index = start;
-            assert!(list.pick_index().is_some());
-            assert_eq!(list.lock().next_index, (start + 1) % 3);
-        }
-    }
-
-    #[test]
-    fn pick_index_cursor_wraps_when_every_proxy_is_cooling_down() {
-        // "c" is due back first. Picking it must wrap the cursor to 0.
-        let list = list(&["http://a", "http://b", "http://c"]);
-        let now = Instant::now();
-        {
-            let mut state = list.lock();
-            state.bad_until[0] = Some(now + Duration::from_secs(60));
-            state.bad_until[1] = Some(now + Duration::from_secs(60));
-            state.bad_until[2] = Some(now + Duration::from_secs(10));
-        }
-        assert_eq!(list.pick_index(), Some(2));
-        assert_eq!(list.lock().next_index, 0);
-    }
-
-    #[test]
-    fn pick_index_avoiding_cursor_wraps_at_len() {
-        let list = list(&["http://a", "http://b", "http://c"]);
-        list.lock().next_index = 2;
-        // Cursor on "c", "b" avoided: "c" it is, and the cursor wraps to 0.
-        assert_eq!(list.pick_index_avoiding(&[1]), Some(2));
-        assert_eq!(list.lock().next_index, 0);
-    }
-
-    #[test]
-    fn pick_index_ties_prefer_rotation_order() {
-        let list = list(&["http://a", "http://b"]);
-        // Exact tie: rotation order decides.
-        let until = Instant::now().checked_add(Duration::from_secs(60)).unwrap();
-        {
-            let mut state = list.lock();
-            state.bad_until[0] = Some(until);
-            state.bad_until[1] = Some(until);
-        }
-        assert_eq!(list.pick(), Some("http://a/"));
-    }
-
-    #[test]
-    fn empty_list_has_no_pick() {
-        let list = ProxyList::new(Vec::<String>::new()).unwrap();
-        assert!(list.is_empty());
-        assert_eq!(list.len(), 0);
-        assert_eq!(list.pick(), None);
-    }
-
-    #[test]
-    fn is_empty_is_false_for_a_nonempty_list() {
-        assert!(!list(&["http://a"]).is_empty());
-    }
-
-    #[test]
-    fn rejects_blank_proxy_entries() {
-        let err = ProxyList::new(["  "]).unwrap_err();
-        assert!(matches!(err, Error::InvalidProxy { .. }));
-    }
-
-    #[test]
-    fn vendor_colon_format_is_explained_and_redacted() {
-        let err = ProxyList::new(["1.2.3.4:8080:user:s3cret"]).unwrap_err();
-        let message = err.to_string();
-        let reason = std::error::Error::source(&err).unwrap().to_string();
-        assert!(!message.contains("s3cret"), "{message}");
-        assert!(!message.contains("user"), "{message}");
-        assert!(!reason.contains("s3cret"), "{reason}");
-        assert!(reason.contains("http://user:pass@host:port"), "{reason}");
-
-        let at_spelling = ProxyList::new(["1.2.3.4:8080@user:s3cret"])
-            .unwrap_err()
-            .to_string();
-        assert!(!at_spelling.contains("s3cret"), "{at_spelling}");
-    }
-
-    #[test]
-    fn vendor_hint_needs_every_guard_to_agree() {
-        let no_hint = |raw: &str| {
-            let err = ProxyList::new([raw]).unwrap_err();
-            let reason = std::error::Error::source(&err).unwrap().to_string();
-            assert!(
-                !reason.contains("write `host:port:user:pass`"),
-                "{raw:?}: {reason}"
-            );
-        };
-        no_hint("a:1234://p:q"); // has a scheme
-        no_hint("1234:5678:9012:3456@"); // has a `@`
-        no_hint("host:1234:extra"); // not exactly three colons
-        no_hint("2001:db8::1"); // unbracketed IPv6: second field is not a port
-        no_hint("host::extra:more"); // second field is empty, not a port
-        no_hint("::1"); // bare IPv6 loopback: two colons, no port
-
-        // A bracketed IPv6 literal is a valid host:port and never reaches
-        // the hint at all.
-        assert_eq!(
-            ProxyList::new(["[::1]:8080"]).unwrap().as_slice(),
-            ["http://[::1]:8080/"]
-        );
-    }
-
-    #[test]
-    fn rejects_unparseable_and_unknown_schemes() {
-        assert!(matches!(
-            ProxyList::new(["not a valid proxy url"]).unwrap_err(),
-            Error::InvalidProxy { .. }
-        ));
-        assert!(matches!(
-            ProxyList::new(["ftp://proxy.example:21"]).unwrap_err(),
-            Error::InvalidProxy { .. }
-        ));
-    }
-
-    #[test]
-    fn scheme_less_entries_are_treated_as_http() {
-        let list = list(&[
-            "1.2.3.4:8080",
-            "user:pass@proxy.example:3128",
-            "localhost:9",
-        ]);
-        assert_eq!(
-            list.as_slice(),
-            &[
-                "http://1.2.3.4:8080/",
-                "http://user:pass@proxy.example:3128/",
-                "http://localhost:9/",
-            ]
-        );
-    }
-
-    #[test]
-    fn urls_are_canonicalised() {
-        let list = list(&[
-            "HTTP://Proxy.Example:80",
-            "https://user:pass@proxy.example:443",
-            "http://proxy.example:8080/",
-        ]);
-        assert_eq!(
-            list.as_slice(),
-            &[
-                "http://proxy.example/",
-                "https://user:pass@proxy.example/",
-                "http://proxy.example:8080/",
-            ]
-        );
-    }
-
-    #[test]
-    fn iter_yields_canonical_urls_in_rotation_order() {
-        let list = list(&["HTTP://Proxy.Example:80", "proxy-b.example:8080"]);
-        let urls: Vec<&str> = list.iter().collect();
-        assert_eq!(
-            urls,
-            &["http://proxy.example/", "http://proxy-b.example:8080/"]
-        );
-        assert_eq!(list.iter().len(), list.len());
-
-        let reversed: Vec<&str> = list.iter().rev().collect();
-        assert_eq!(
-            reversed,
-            &["http://proxy-b.example:8080/", "http://proxy.example/"]
-        );
-    }
-
-    #[test]
-    fn iter_redacted_hides_credentials_in_rotation_order() {
-        let list = list(&["http://alice:s3cret@a:8080", "b:3128"]);
-        let shown: Vec<String> = list.iter_redacted().collect();
-        assert_eq!(shown, ["http://***@a:8080/", "http://b:3128/"]);
-    }
-
-    #[cfg(not(feature = "socks"))]
-    #[test]
-    fn socks_is_rejected_without_the_feature() {
-        let err = ProxyList::new(["socks5://127.0.0.1:1080"]).unwrap_err();
-        let Error::InvalidProxy { .. } = &err else {
-            panic!("expected InvalidProxy");
-        };
-        assert!(err.to_string().contains("socks"), "{err}");
-    }
-
-    #[cfg(feature = "socks")]
-    #[test]
-    fn socks_is_accepted_with_the_feature() {
-        let list = list(&["socks5://127.0.0.1:1080", "socks5h://127.0.0.1:1081"]);
-        assert_eq!(list.len(), 2);
-    }
-
-    #[test]
-    fn duplicates_are_dropped_keeping_first_position() {
-        let list = list(&["http://a", "http://b", "http://a/", "b", "HTTP://A:80"]);
-        assert_eq!(list.as_slice(), &["http://a/", "http://b/"]);
-    }
-
-    #[test]
-    fn dedup_holds_at_scale() {
-        // 2000 inputs, every second one a repeat: 1000 left, first-seen order.
-        let proxies: Vec<String> = (0..2000)
-            .map(|i| format!("http://10.0.0.{}:{}", i / 2 % 256, 9000 + i / 2))
-            .collect();
-        let list = ProxyList::new(&proxies).unwrap();
-        assert_eq!(list.len(), 1000);
-        assert_eq!(list.as_slice()[0], "http://10.0.0.0:9000/");
-        assert_eq!(list.as_slice()[999], "http://10.0.0.231:9999/");
-    }
-
-    #[test]
-    fn mark_bad_is_skipped_until_cooldown_expires() {
-        let list = list(&["http://a", "http://b"]);
-        assert_eq!(list.pick(), Some("http://a/"));
-        // The un-canonicalised spelling is accepted too.
-        assert!(list.mark_bad("http://b", Duration::from_millis(50)));
-        assert!(list.in_cooldown("http://b/"));
-        assert!(list.in_cooldown("b"));
-        // "b" is next in rotation but is in cooldown, so "a" is served again.
-        assert_eq!(list.pick(), Some("http://a/"));
-        std::thread::sleep(Duration::from_millis(80));
-        assert!(!list.in_cooldown("http://b/"));
-        assert_eq!(list.pick(), Some("http://b/"));
-    }
-
-    #[test]
-    fn mark_bad_on_unknown_proxy_is_a_no_op() {
-        let list = list(&["http://a"]);
-        assert!(!list.mark_bad("http://nope", Duration::from_secs(60)));
-        assert!(!list.mark_bad("not a url at all", Duration::from_secs(60)));
-        assert!(!list.in_cooldown("http://nope"));
-        assert_eq!(list.pick(), Some("http://a/"));
-    }
-
-    #[test]
-    fn mark_good_index_clears_a_cooldown() {
-        let list = list(&["http://a", "http://b"]);
-        list.mark_bad("http://a", Duration::from_secs(60));
-        assert!(list.in_cooldown("http://a"));
-        list.mark_good_index(0);
-        assert!(!list.in_cooldown("http://a"));
-        assert_eq!(list.pick(), Some("http://a/"));
-    }
-
-    #[test]
-    fn mark_good_clears_a_cooldown_early() {
-        let list = list(&["http://a", "http://b"]);
-        assert_eq!(list.pick(), Some("http://a/"));
-        assert!(list.mark_bad("http://b", Duration::from_secs(60)));
-        assert!(list.in_cooldown("http://b/"));
-        // The un-canonicalised spelling is accepted too.
-        assert!(list.mark_good("b"));
-        assert!(!list.in_cooldown("http://b/"));
-        assert_eq!(list.pick(), Some("http://b/"));
-    }
-
-    #[test]
-    fn mark_good_on_unknown_proxy_is_a_no_op() {
-        let list = list(&["http://a", "http://b"]);
-        assert_eq!(list.pick(), Some("http://a/"));
-        assert!(list.mark_bad("http://b", Duration::from_secs(60)));
-        assert!(!list.mark_good("http://nope"));
-        assert!(!list.mark_good("not a url at all"));
-        // "b" is still cooling down, so "a" is served again.
-        assert!(list.in_cooldown("http://b/"));
-        assert_eq!(list.pick(), Some("http://a/"));
-    }
-
-    #[test]
-    fn mark_good_on_a_healthy_proxy_changes_nothing() {
-        let list = list(&["http://a", "http://b", "http://c"]);
-        assert!(list.mark_good("http://b"));
-        assert_eq!(list.pick(), Some("http://a/"));
-        assert_eq!(list.pick(), Some("http://b/"));
-        assert_eq!(list.pick(), Some("http://c/"));
-    }
-
-    #[test]
-    fn all_proxies_bad_returns_the_one_recovering_first() {
-        let list = list(&["http://a", "http://b", "http://c"]);
-        list.mark_bad("http://a", Duration::from_secs(60));
-        list.mark_bad("http://b", Duration::from_secs(10));
-        list.mark_bad("http://c", Duration::from_secs(60));
-        assert_eq!(list.pick(), Some("http://b/"));
-        // With every proxy cooling down, consecutive picks repeat the
-        // soonest-recovering one: nothing here has answered to clear it.
-        assert_eq!(list.pick(), Some("http://b/"));
-        // Rotation then carries on after the proxy it fell back to.
-        for proxy in ["http://a", "http://b", "http://c"] {
-            list.mark_good(proxy);
-        }
-        assert_eq!(list.pick(), Some("http://c/"));
-    }
-
-    #[test]
-    fn any_healthy_except_ignores_the_given_index() {
-        let pool = list(&["http://a", "http://b"]);
-        assert!(pool.any_healthy_except(0));
-        pool.mark_bad("http://b", Duration::from_secs(60));
-        assert!(!pool.any_healthy_except(0));
-        assert!(pool.any_healthy_except(1));
-
-        // Once a cooldown has actually expired (not just been set to a
-        // duration too short to ever matter), the proxy it covers counts as
-        // healthy again: "a" recovers while "b" (excluded above) stays bad.
-        pool.mark_bad("http://a", Duration::from_millis(50));
-        std::thread::sleep(Duration::from_millis(80));
-        assert!(pool.any_healthy_except(1));
-
-        let single = list(&["http://a"]);
-        assert!(!single.any_healthy_except(0));
-    }
-
-    #[test]
-    fn pick_avoiding_skips_a_healthy_proxy_it_is_told_to_avoid() {
-        let pool = list(&["http://a", "http://b"]);
-        assert_eq!(pool.pick_index_avoiding(&[0]), Some(1));
-        assert_eq!(pool.pick_index_avoiding(&[1]), Some(0));
-        // Nothing else healthy: avoid is advisory, and the plain rotation
-        // carries on from the cursor.
-        assert_eq!(pool.pick_index_avoiding(&[0, 1]), Some(1));
-        assert!(!pool.any_healthy_outside(&[0, 1]));
-    }
-
-    #[test]
-    fn huge_cooldown_does_not_panic_or_poison() {
-        let list = list(&["http://a", "http://b"]);
-        list.mark_bad("http://a", Duration::MAX);
-        assert!(list.in_cooldown("http://a"));
-        assert_eq!(list.pick(), Some("http://b/"));
-    }
-
-    #[test]
-    fn debug_output_hides_credentials() {
-        let list = list(&["http://user:s3cret@a:8080", "http://b"]);
-        list.mark_bad("http://b", Duration::from_secs(60));
-        let debug = format!("{list:?}");
-        assert!(!debug.contains("s3cret"), "{debug}");
-        assert!(debug.contains("http://***@a:8080/"), "{debug}");
-        assert!(debug.contains("in_cooldown: [\"http://b/\"]"), "{debug}");
-    }
-
-    #[test]
-    fn redaction_handles_urls_without_credentials() {
-        assert_eq!(redact_userinfo("http://a:8080/"), "http://a:8080/");
-        assert_eq!(redact_userinfo("http://u:p@a/"), "http://***@a/");
-        assert_eq!(redact_userinfo("socks5://u@a/"), "socks5://***@a/");
-        assert_eq!(redact_userinfo("garbage"), "garbage");
-        assert_eq!(
-            redact_userinfo("user:pass@proxy.example:3128"),
-            "***@proxy.example:3128"
-        );
-        assert_eq!(
-            redact_userinfo("http://user:p@ss@proxy.example:3128"),
-            "http://***@proxy.example:3128"
-        );
-        assert_eq!(redact_userinfo("http://h/@path"), "http://h/@path");
-        assert_eq!(
-            redact_userinfo("http://u:p@h/@path?x=@y"),
-            "http://***@h/@path?x=@y"
-        );
-    }
-
-    #[test]
-    fn unparsable_redaction_assumes_the_worst() {
-        assert_eq!(
-            redact_unparsable("http://user:p?ss@host:3128"),
-            "http://***@host:3128"
-        );
-        assert_eq!(redact_unparsable("user:p#ss@host:3128"), "***@host:3128");
-        assert_eq!(redact_unparsable("a@b@c"), "***@c");
-        assert_eq!(redact_unparsable("nope"), "nope");
-        assert_eq!(redact_unparsable("http://"), "http://");
-        // The port-shaped check catches this one too: "//x" is not a
-        // port, so it is hidden the same way as a real `host:port@user:pass`.
-        assert_eq!(redact_unparsable("user@host://x"), "***@host:***");
-    }
-
-    fn invalid_proxy_message(input: &str) -> String {
-        ProxyList::new([input]).unwrap_err().to_string()
-    }
-
-    #[test]
-    fn invalid_proxy_error_redacts_credentials_of_unsupported_scheme() {
-        let message = invalid_proxy_message("ftp://user:pass@host:21");
-
-        assert!(!message.contains("pass"), "{message}");
-        assert!(!message.contains("user:"), "{message}");
-        assert!(message.contains("***@"), "{message}");
-    }
-
-    #[test]
-    fn invalid_proxy_error_keeps_the_callers_schemeless_spelling() {
-        // A schemeless input must not have the `http://` this function
-        // synthesises internally leak into the message: the caller never
-        // typed it, so the message should open with their own spelling.
-        let schemeless = invalid_proxy_message("not a valid proxy url");
-
-        assert_eq!(schemeless, "invalid proxy: not a valid proxy url");
-    }
-
-    #[test]
-    fn invalid_proxy_error_redacts_credentials_of_schemeless_input() {
-        let schemeless_with_credentials = invalid_proxy_message("user:s3cret@not a url");
-
-        assert!(
-            !schemeless_with_credentials.contains("s3cret"),
-            "{schemeless_with_credentials}"
-        );
-        assert!(
-            schemeless_with_credentials.starts_with("invalid proxy: ***@"),
-            "{schemeless_with_credentials}"
-        );
-    }
-
-    #[test]
-    fn invalid_proxy_error_redacts_at_sign_in_password_with_scheme() {
-        let scheme_with_at_in_password = invalid_proxy_message("ftp://user:p@ss@host:21");
-
-        assert!(
-            !scheme_with_at_in_password.contains("ss@"),
-            "{scheme_with_at_in_password}"
-        );
-        assert!(
-            scheme_with_at_in_password.contains("***@host"),
-            "{scheme_with_at_in_password}"
-        );
-    }
-
-    #[test]
-    fn invalid_proxy_error_redacts_at_sign_in_password_without_scheme() {
-        let schemeless_with_at_in_password = invalid_proxy_message("user:p@ss@host:99999");
-
-        assert!(
-            !schemeless_with_at_in_password.contains("ss@"),
-            "{schemeless_with_at_in_password}"
-        );
-        assert!(
-            schemeless_with_at_in_password.contains("***@host"),
-            "{schemeless_with_at_in_password}"
-        );
-    }
-
-    #[test]
-    fn invalid_proxy_error_redacts_whole_spelling_when_password_has_question_mark() {
-        // A password containing `/`, `?` or `#` makes the URL fail to
-        // parse; the authority boundary is then unknown, so the whole
-        // spelling up to the last `@` must be redacted, not just the part
-        // `redact_userinfo` would have guessed at.
-        let question_mark_in_password_err =
-            ProxyList::new(["http://user:p?ss@host:3128"]).unwrap_err();
-        let question_mark_in_password = question_mark_in_password_err.to_string();
-
-        assert!(
-            !question_mark_in_password.contains("p?ss"),
-            "{question_mark_in_password}"
-        );
-        assert_eq!(
-            question_mark_in_password,
-            "invalid proxy: http://***@host:3128"
-        );
-        assert_eq!(
-            std::error::Error::source(&question_mark_in_password_err)
-                .unwrap()
-                .to_string(),
-            "not a valid proxy URL"
-        );
-    }
-
-    #[test]
-    fn invalid_proxy_error_redacts_whole_spelling_when_password_has_hash() {
-        let hash_in_password = invalid_proxy_message("user:p#ss@host:3128");
-
-        assert!(!hash_in_password.contains("p#ss"), "{hash_in_password}");
-        assert!(hash_in_password.contains("***@host:3128"));
-    }
-
-    #[test]
-    fn invalid_proxy_error_leaves_input_without_credentials_alone() {
-        // No `@` at all: nothing to redact.
-        let no_credentials = invalid_proxy_message("http://");
-
-        assert_eq!(no_credentials, "invalid proxy: http://");
-    }
-}
+mod tests;

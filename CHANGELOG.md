@@ -4,6 +4,46 @@ All notable changes to this crate are documented in this file. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- A proxy entry with an `@` after its host, in a path, query or
+  fragment, is now rejected: in most such entries the `@` belongs to a
+  password the parser read as a path, so the request went to another
+  host.
+- A proxy entry that starts with the name of a supported scheme, or of
+  `ftp`, `ws`, `wss` or `file`, a `:` and a single `/` or `\`, such as
+  `http:/1.2.3.4:8080:user:password`, is now rejected: it was stored as
+  a proxy at a host named `http`, which never answered. For `ftp`,
+  `ws`, `wss` and `file` the error is the one for an unsupported
+  scheme.
+- A redacted proxy, in `ProxyList::iter_redacted`, `Debug` output,
+  `tracing` events, the `proxy` of an `on_retry` event and the `proxy`
+  of an `InvalidProxy` error about a parsed entry, now reads
+  `scheme://host:port/`, with `***@` before the host when the URL has a
+  user or a password. The path, query and fragment are left out.
+- The error for a refused entry says what to change in two more cases:
+  a `\` in the password of an `http` or `https` entry is to be
+  percent-encoded as `%5C`, and `http:host:8080` is to be written with
+  `://`.
+
+### Fixed
+
+- A malformed proxy entry, such as `user:password@host://x@y`,
+  `user:1234/password@host` or `user:/password/@x/../y`, could show its
+  password in the `InvalidProxy` error message, in `Debug` output and
+  in tracing events. Errors now hide everything up to the last `@`
+  unless a valid scheme comes first.
+- An entry with extra slashes before the user name, such as
+  `http:///user:password@host`, is still accepted, but could show its
+  password in the `Debug` output of a builder and in an error about its
+  scheme. Both now hide it.
+- The reversed vendor form `host:80@user:123#password` is still
+  accepted, but showed the password in `iter_redacted`, `Debug` output,
+  `tracing` events and the `proxy` of an `on_retry` event. The redacted
+  form no longer has a path, query or fragment to show it in.
+
 ## [0.2.0] - 2026-09-27
 
 ### Added
@@ -193,6 +233,7 @@ Also in this release:
   `socks4a://`, `socks5://` and `socks5h://` proxies, and `tracing`
   emits debug-level events for retries and proxy rotation.
 
+[Unreleased]: https://github.com/sopilnik/reqwest-rotate/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/sopilnik/reqwest-rotate/releases/tag/v0.2.0
 [0.1.1]: https://github.com/sopilnik/reqwest-rotate/releases/tag/v0.1.1
 [0.1.0]: https://github.com/sopilnik/reqwest-rotate/releases/tag/v0.1.0

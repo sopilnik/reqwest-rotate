@@ -44,8 +44,8 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuf {
 }
 
 /// The attempt line must carry the request URL without its query string
-/// (where callers put secrets such as an API key) and the proxy with its
-/// `user:password@` replaced by `***@`, and no `trace_log!` site may embed
+/// (where callers put secrets such as an API key) and the proxy as
+/// `scheme://***@host:port/`, and no `trace_log!` site may embed
 /// a `reqwest::Error`'s own text, which repeats the URL. Port 1: nothing
 /// listens, so the connect fails at once.
 #[tokio::test]

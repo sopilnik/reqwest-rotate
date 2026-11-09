@@ -825,3 +825,569 @@ async fn idle_connections_are_closed_after_the_pool_timeout() {
     assert_eq!(response.status(), 200);
     assert_eq!(connections.load(Ordering::SeqCst), 2);
 }
+
+const PASSWORD: &str = "pw-7f3a9c1e";
+
+fn texts_about_entry(entry: &str) -> Vec<String> {
+    let builder = format!("{:?}", RotatingClient::builder().proxies([entry]));
+    match ProxyList::new([entry]) {
+        Ok(list) => vec![
+            format!("{list:?}"),
+            list.iter_redacted().collect::<Vec<_>>().join(" "),
+            builder,
+        ],
+        Err(error) => {
+            let mut texts = vec![format!("{error:?}"), builder];
+            let mut cause: Option<&dyn std::error::Error> = Some(&error);
+            while let Some(current) = cause {
+                texts.push(current.to_string());
+                cause = current.source();
+            }
+            texts
+        }
+    }
+}
+
+#[test]
+fn a_proxy_password_never_shows_up_in_any_text_about_the_entry() {
+    let entries = [
+        "user:pw-7f3a9c1e@2://@O",
+        "user:pw-7f3a9c1e@\0\0://1@1",
+        "user:pw-7f3a9c1e@a://1@1",
+        "user:pw-7f3a9c1e@a://1@1/path",
+        "user:pw-7f3a9c1e@x@y://z@w",
+        "user:pw-7f3a9c1e@a/b://c@d",
+        "user:pw-7f3a9c1e://x@host:80",
+        "http://user:pw-7f3a9c1e://x@host:80",
+        "http://user:pw-7f3a9c1e@host:80",
+        "http://user:pw-7f3a9c1e@a://1@1",
+        "https://user:pw-7f3a9c1e@a://1@1",
+        "socks5://user:pw-7f3a9c1e@a://1@1",
+        "ftp://user:pw-7f3a9c1e@a://1@1",
+        "ftp://user:pw-7f3a9c1e@host:21",
+        "ft\np://user:pw-7f3a9c1e@host:21",
+        "\u{1}ftp://user:pw-7f3a9c1e@host:21",
+        "user:pw-7f3a9c1e@host:80",
+        "user:pw-7f3a9c1e@host:99999",
+        "user:pw-7f3a9c1e/x@host:80",
+        "user:pw-7f3a9c1e?x@host:80",
+        "user:pw-7f3a9c1e#x@host:80",
+        "host:80:user:pw-7f3a9c1e",
+        "host:80@user:pw-7f3a9c1e",
+        "user:1234/pw-7f3a9c1e@host:80",
+        "user:1234?pw-7f3a9c1e@host:80",
+        "user:1234#pw-7f3a9c1e@host:80",
+        "http://user:1234/pw-7f3a9c1e@host:80",
+        "https://user:1234/pw-7f3a9c1e@host:80",
+        "socks5://user:1234/pw-7f3a9c1e@host:80",
+        "ftp://user:1234/pw-7f3a9c1e@host:80",
+        "http:/user:pw-7f3a9c1e@host",
+        "http:\\\\user:pw-7f3a9c1e@host",
+        "user:80/a/b?c#pw-7f3a9c1e@host",
+        "user:ab/pw-7f3a9c1e@host:80",
+        "user:ab?pw-7f3a9c1e@host:80",
+        "http://user:ab#pw-7f3a9c1e@host:80",
+        "socks5://user:ab/pw-7f3a9c1e@host:1080",
+        "ftp://user:ab/pw-7f3a9c1e@host:21",
+        "ftp://user:/.pw-7f3a9c1e\u{7f}/@\0/../~:/\0../~",
+        "socks5://user:///pw-7f3a9c1e/://///b@\0\0/%2E.?\0\u{19};#\0/\0/:'///",
+        "user:/pw-7f3a9c1e/@x/../y",
+        "http://user:/pw-7f3a9c1e/@x/../y",
+        "user:/pw-7f3a9c1e@x/../y",
+        "user:/pw-7f3a9c1e/@x/./y",
+        "user:/pw-7f3a9c1e/@x/%2e%2E/y",
+        "user:?pw-7f3a9c1e/@x/../y",
+        "user:#pw-7f3a9c1e/@x/../y",
+        "ht\ntp://user:/pw-7f3a9c1e/@x/../y",
+        "http://user:\\pw-7f3a9c1e/@x/../y",
+        "http://user:1234\\pw-7f3a9c1e@host",
+        "socks5://user:a\\b-pw-7f3a9c1e@host:1080",
+        "\u{a0}http://user:pw-7f3a9c1e@host:80",
+        "\u{85}user:pw-7f3a9c1e@host:80",
+        " \t user:pw-7f3a9c1e@host:80 \n",
+        "http://user:pw-7f3a9c1e\u{ff20}host",
+        "http://user:pw-7f3a9c1e@ho\u{ff20}st",
+        "http://user:pw-7f3a9c1e@%68ost",
+        "HTTP://user:pw-7f3a9c1e@HOST:80",
+        "http:/1.2.3.4:8080:user:pw-7f3a9c1e",
+        "https:/1.2.3.4:8080:user:pw-7f3a9c1e",
+        "socks5:/h:1080:user:pw-7f3a9c1e",
+        "http:\\\\1.2.3.4:8080:user:pw-7f3a9c1e",
+        "http:/\\1.2.3.4:8080:user:pw-7f3a9c1e",
+        "proxy.example:8080@alice:123#pw-7f3a9c1e",
+        "proxy.example:8080@alice:/pw-7f3a9c1e",
+        "proxy.example:8080@alice:?pw-7f3a9c1e",
+        "proxy.example:8080@alice:12/pw-7f3a9c1e",
+        "host:80@u:12?pw-7f3a9c1e#x",
+        "http://host:8080/pw-7f3a9c1e?pw-7f3a9c1e#pw-7f3a9c1e",
+        "http://user:x@host:8080/pw-7f3a9c1e?q=pw-7f3a9c1e#pw-7f3a9c1e",
+        "http:/u:pw-7f3a9c1e@h/x://y",
+        "http:\\\\u:pw-7f3a9c1e@h://",
+        "http:///user:pw-7f3a9c1e@host",
+        "https:////user:pw-7f3a9c1e@host",
+        "socks5:///user:pw-7f3a9c1e@host:1080",
+        "/user:pw-7f3a9c1e@host",
+        "http:///user:a/b-pw-7f3a9c1e@host",
+        "http://\\user:pw-7f3a9c1e@host",
+    ];
+
+    for entry in entries {
+        for text in texts_about_entry(entry) {
+            assert!(
+                !text.contains(PASSWORD),
+                "the password of {entry:?} shows up in {text:?}"
+            );
+        }
+    }
+}
+
+const PERCENT_ENCODE_HINT: &str =
+    "not a valid proxy URL; percent-encode `/`, `?` and `#` in the password (`%2F`, `%3F`, `%23`)";
+const PERCENT_ENCODE_HINT_SPECIAL: &str = "not a valid proxy URL; percent-encode `/`, `?`, `#` and `\\` in the password (`%2F`, `%3F`, `%23`, `%5C`)";
+const SCHEME_HINT: &str = "not a valid proxy URL; a scheme is followed by `://`";
+
+#[test]
+fn an_at_sign_after_the_host_is_refused_and_hidden() {
+    let refused = [
+        ("user:1234/secret@host:80", "invalid proxy: ***@host:80"),
+        ("user:1234?secret@host:80", "invalid proxy: ***@host:80"),
+        ("user:1234#secret@host:80", "invalid proxy: ***@host:80"),
+        (
+            "http://user:1234/secret@host:80",
+            "invalid proxy: http://***@host:80",
+        ),
+    ];
+
+    for (entry, message) in refused {
+        let error = ProxyList::new([entry]).unwrap_err();
+        let reason = std::error::Error::source(&error).unwrap().to_string();
+
+        assert_eq!(error.to_string(), message, "{entry}");
+        assert_eq!(reason, PERCENT_ENCODE_HINT_SPECIAL, "{entry}");
+    }
+}
+
+#[test]
+fn a_scheme_with_one_slash_gets_the_scheme_hint() -> Result<(), Box<dyn std::error::Error>> {
+    assert_refused_with(
+        "http:/user:secret@host",
+        "invalid proxy: ***@host",
+        SCHEME_HINT,
+    )?;
+    assert_refused_with(
+        "https:\\user:secret@host:8443",
+        "invalid proxy: ***@host:8443",
+        SCHEME_HINT,
+    )?;
+    assert_refused_with("http:1.2.3.4:8080", "invalid proxy: http:***", SCHEME_HINT)?;
+    // Encoding or fixing the slashes would not make this one valid.
+    assert_refused_with(
+        "http:user:secret@host:99999",
+        "invalid proxy: ***@host:99999",
+        "not a valid proxy URL",
+    )
+}
+
+#[test]
+fn a_user_the_parser_found_gets_no_hint() -> Result<(), Box<dyn std::error::Error>> {
+    assert_refused_with(
+        "http://user:pw@proxy:8080/@x",
+        "invalid proxy: http://***@x",
+        "not a valid proxy URL",
+    )
+}
+
+#[test]
+fn a_backslash_in_a_password_is_to_be_encoded_for_http_and_not_for_socks()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_refused_with(
+        "http://user:a\\b@host:8080",
+        "invalid proxy: http://***@host:8080",
+        PERCENT_ENCODE_HINT_SPECIAL,
+    )?;
+    let list = ProxyList::new(["http://user:a%5Cb@host:8080"])?;
+    assert_eq!(
+        list.iter_redacted().collect::<Vec<_>>(),
+        ["http://***@host:8080/"]
+    );
+
+    Ok(())
+}
+
+#[cfg(feature = "socks")]
+#[test]
+fn a_backslash_in_a_socks_password_is_accepted() -> Result<(), Box<dyn std::error::Error>> {
+    let list = ProxyList::new(["socks5://user:a\\b@host:1080"])?;
+
+    assert_eq!(
+        list.iter().collect::<Vec<_>>(),
+        ["socks5://user:a%5Cb@host:1080"]
+    );
+    assert_eq!(
+        list.iter_redacted().collect::<Vec<_>>(),
+        ["socks5://***@host:1080/"]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn a_path_without_an_at_sign_is_still_accepted() {
+    let list = ProxyList::new(["http://user:pw@host:8080/some/path?a=b#c"]).unwrap();
+
+    assert_eq!(
+        list.iter().collect::<Vec<_>>(),
+        ["http://user:pw@host:8080/some/path?a=b#c"]
+    );
+}
+
+#[test]
+fn the_percent_encoding_hint_goes_to_entries_it_fixes() -> Result<(), Box<dyn std::error::Error>> {
+    let hinted = [
+        ("user:ab/cd@host:80", "invalid proxy: ***@host:80"),
+        ("user:ab?cd@host:80", "invalid proxy: ***@host:80"),
+        ("user:12/cd@host:80", "invalid proxy: ***@host:80"),
+        (
+            "http://user:ab#cd@host:80",
+            "invalid proxy: http://***@host:80",
+        ),
+        (
+            "https://user:a1/b@host:443",
+            "invalid proxy: https://***@host:443",
+        ),
+        ("user:pw://x@host:80", "invalid proxy: ***@host:80"),
+        ("user:p/w@ss@host:80", "invalid proxy: ***@host:80"),
+        ("user:/pw@x/../y", "invalid proxy: ***@x"),
+        ("user:?pw@x/../y", "invalid proxy: ***@x"),
+        ("user:#pw@x/../y", "invalid proxy: ***@x"),
+        ("http:///user:a/b@host", "invalid proxy: http://***@host"),
+        ("http://host:80\\p@q", "invalid proxy: http://***@q"),
+        ("http://user:\\pw@x/./y", "invalid proxy: http://***@x"),
+        ("ht\ntp://user:/pw@x/../y", "invalid proxy: http://***@x"),
+    ];
+    let plain = [
+        ("user:pw@host:99999", "invalid proxy: ***@host:99999"),
+        (
+            "http://user:pw@host:99999",
+            "invalid proxy: http://***@host:99999",
+        ),
+        ("user:p@ss@host:99999", "invalid proxy: ***@host:99999"),
+        ("user:ab/cd@host:99999", "invalid proxy: ***@host:99999"),
+        ("user:12/cd@host:99999", "invalid proxy: ***@host:99999"),
+        ("user:ab/cd@", "invalid proxy: ***@"),
+        ("user:1/2@", "invalid proxy: ***@"),
+        (
+            "http://u:1/2@host:abc",
+            "invalid proxy: http://***@host:***",
+        ),
+        (
+            "ftp://user:ab/cd@host:21",
+            "invalid proxy: ftp://***@host:21",
+        ),
+        ("user@host://x", "invalid proxy: ***@host:***"),
+        (
+            "not a valid proxy url",
+            "invalid proxy: not a valid proxy url",
+        ),
+        (
+            "socks5:///user:pw@host:1080",
+            "invalid proxy: socks5://***@host:1080",
+        ),
+    ];
+    let socks = [
+        (
+            "socks5://user:ab/cd@host:1080",
+            "invalid proxy: socks5://***@host:1080",
+        ),
+        ("socks5h://u:1?y@h:1", "invalid proxy: socks5h://***@h:1"),
+    ];
+
+    for (entry, message) in hinted {
+        assert_refused_with(entry, message, PERCENT_ENCODE_HINT_SPECIAL)?;
+    }
+    for (entry, message) in plain {
+        assert_refused_with(entry, message, "not a valid proxy URL")?;
+    }
+    for (entry, message) in socks {
+        let reason = if cfg!(feature = "socks") {
+            PERCENT_ENCODE_HINT
+        } else {
+            "not a valid proxy URL"
+        };
+
+        assert_refused_with(entry, message, reason)?;
+    }
+
+    Ok(())
+}
+
+fn assert_refused_with(
+    entry: &str,
+    message: &str,
+    reason: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let error = ProxyList::new([entry])
+        .err()
+        .ok_or("the entry was accepted")?;
+    let source = std::error::Error::source(&error)
+        .ok_or("the error has no source")?
+        .to_string();
+
+    assert_eq!(error.to_string(), message, "{entry}");
+    assert_eq!(source, reason, "{entry}");
+
+    Ok(())
+}
+
+#[test]
+fn a_percent_encoded_password_is_accepted() {
+    let list = ProxyList::new(["user:ab%2Fcd%3Fe%23f@host:80"]).unwrap();
+
+    assert_eq!(
+        list.iter_redacted().collect::<Vec<_>>(),
+        ["http://***@host/"]
+    );
+}
+
+#[test]
+fn what_the_parser_normalises_is_still_accepted_and_redacted()
+-> Result<(), Box<dyn std::error::Error>> {
+    let entries = [
+        (
+            "http://u:p@host:8080/a/../b",
+            "http://u:p@host:8080/b",
+            "http://***@host:8080/",
+        ),
+        (
+            "HTTP://U:p@HOST:8080",
+            "http://U:p@host:8080/",
+            "http://***@host:8080/",
+        ),
+        (
+            "\u{a0}u:p@host:8080",
+            "http://u:p@host:8080/",
+            "http://***@host:8080/",
+        ),
+        (
+            " \t u:p@host:8080/a/./b \n",
+            "http://u:p@host:8080/a/b",
+            "http://***@host:8080/",
+        ),
+        (
+            "http://u:p@host:80/%40",
+            "http://u:p@host/%40",
+            "http://***@host/",
+        ),
+    ];
+
+    for (entry, stored, shown) in entries {
+        let list = ProxyList::new([entry])?;
+
+        assert_eq!(list.iter().collect::<Vec<_>>(), [stored], "{entry:?}");
+        assert_eq!(
+            list.iter_redacted().collect::<Vec<_>>(),
+            [shown],
+            "{entry:?}"
+        );
+        assert!(!format!("{:?}", RotatingClient::builder().proxies([entry])).contains(":p@"));
+    }
+
+    Ok(())
+}
+
+#[test]
+fn extra_slashes_before_the_user_name_are_accepted_and_hidden()
+-> Result<(), Box<dyn std::error::Error>> {
+    let entries = [
+        (
+            "http:///user:pw@host",
+            "http://user:pw@host/",
+            "http://***@host/",
+        ),
+        ("https:////u:pw@h:443", "https://u:pw@h/", "https://***@h/"),
+        ("//u:pw@h", "http://u:pw@h/", "http://***@h/"),
+        ("HTTP:///u:pw@h", "http://u:pw@h/", "http://***@h/"),
+        (
+            "http://\\user:pw@host",
+            "http://user:pw@host/",
+            "http://***@host/",
+        ),
+        ("/user:pw@host", "http://user:pw@host/", "http://***@host/"),
+        ("\\user:pw@host", "http://user:pw@host/", "http://***@host/"),
+        ("ht\ntp:///u:pw@h", "http://u:pw@h/", "http://***@h/"),
+        ("http:////u:pw@h/p", "http://u:pw@h/p", "http://***@h/"),
+        ("http:///u:pw@h/../x", "http://u:pw@h/x", "http://***@h/"),
+    ];
+
+    for (entry, stored, shown) in entries {
+        let list = ProxyList::new([entry])?;
+
+        assert_eq!(list.iter().collect::<Vec<_>>(), [stored], "{entry:?}");
+        assert_eq!(
+            list.iter_redacted().collect::<Vec<_>>(),
+            [shown],
+            "{entry:?}"
+        );
+        for text in texts_about_entry(entry) {
+            assert!(
+                !text.contains("pw"),
+                "{entry:?} shows its password in {text:?}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn an_unsupported_scheme_error_hides_the_password_after_extra_slashes() {
+    let error = ProxyList::new(["ws:///u:pw@h"]).unwrap_err();
+
+    assert_eq!(error.to_string(), "invalid proxy: ws://***@h/");
+}
+
+#[test]
+fn a_scheme_with_one_slash_and_a_later_separator_is_still_accepted()
+-> Result<(), Box<dyn std::error::Error>> {
+    let entries = [
+        ("http:/u:pw@h/x://y", "http://u:pw@h/x://y"),
+        ("http:\\\\u:secret@h://", "http://u:secret@h//"),
+        ("https:/u:pw@h:8443/a://b", "https://u:pw@h:8443/a://b"),
+    ];
+
+    for (entry, stored) in entries {
+        let list = ProxyList::new([entry])?;
+
+        assert_eq!(list.iter().collect::<Vec<_>>(), [stored], "{entry:?}");
+    }
+
+    Ok(())
+}
+
+#[test]
+fn a_scheme_followed_by_one_slash_or_a_backslash_is_refused_and_hidden()
+-> Result<(), Box<dyn std::error::Error>> {
+    let entries = [
+        "http:/1.2.3.4:8080:user:pw-7f3a9c1e",
+        "https:/1.2.3.4:8080:user:pw-7f3a9c1e",
+        "socks5:/h:1080:user:pw-7f3a9c1e",
+        "http:\\\\1.2.3.4:8080:user:pw-7f3a9c1e",
+        "http:/\\1.2.3.4:8080:user:pw-7f3a9c1e",
+        "HTTP:/1.2.3.4:8080:user:pw-7f3a9c1e",
+        "HtTpS:\\1.2.3.4:8080:user:pw-7f3a9c1e",
+        "\u{a0} http:/1.2.3.4:8080:user:pw-7f3a9c1e",
+        "\u{feff}http:/1.2.3.4:8080:user:pw-7f3a9c1e",
+        "\u{ad}http:/1.2.3.4:8080:user:pw-7f3a9c1e",
+        "ht\u{200b}tp:/1.2.3.4:8080:user:pw-7f3a9c1e",
+        "\u{ff48}\u{ff54}\u{ff54}\u{ff50}:/1.2.3.4:8080:user:pw-7f3a9c1e",
+    ];
+
+    for entry in entries {
+        let error = ProxyList::new([entry])
+            .err()
+            .ok_or("the entry was accepted")?;
+        let source = std::error::Error::source(&error)
+            .ok_or("no source")?
+            .to_string();
+
+        assert_eq!(source, SCHEME_HINT, "{entry:?}");
+        for text in texts_about_entry(entry) {
+            assert!(
+                !text.contains("pw-7f3a9c1e"),
+                "{entry:?} shows its password in {text:?}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn a_scheme_the_crate_never_accepts_gets_the_scheme_reason_not_the_hint()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (entry, scheme) in [
+        ("ftp:/h:21:user:pw-7f3a9c1e", "ftp"),
+        ("WS:\\h:80:user:pw-7f3a9c1e", "ws"),
+        ("wss:/h:80:user:pw-7f3a9c1e", "wss"),
+        ("file:/h:80:user:pw-7f3a9c1e", "file"),
+    ] {
+        let error = ProxyList::new([entry])
+            .err()
+            .ok_or("the entry was accepted")?;
+        let source = std::error::Error::source(&error)
+            .ok_or("no source")?
+            .to_string();
+
+        assert_eq!(
+            source,
+            format!("unsupported proxy scheme `{scheme}`"),
+            "{entry:?}"
+        );
+        for text in texts_about_entry(entry) {
+            assert!(
+                !text.contains("pw-7f3a9c1e"),
+                "{entry:?} shows its password in {text:?}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn a_host_that_starts_like_a_scheme_is_still_accepted() -> Result<(), Box<dyn std::error::Error>> {
+    let entries = [
+        ("host:8080", "http://host:8080/"),
+        ("localhost:8080", "http://localhost:8080/"),
+        ("http-proxy.example:3128", "http://http-proxy.example:3128/"),
+        ("socks5.example:1080", "http://socks5.example:1080/"),
+        ("http:8080", "http://http:8080/"),
+        ("http:8080/x", "http://http:8080/x"),
+        ("http:secret@host:8080", "http://http:secret@host:8080/"),
+        ("[::1]:3128", "http://[::1]:3128/"),
+        ("http/a:/b", "http://http/a:/b"),
+        ("http?x:/y", "http://http/?x:/y"),
+        ("http#:/x", "http://http/#:/x"),
+        ("https?u=:/x", "http://https/?u=:/x"),
+        ("socks5/proxy:/x", "http://socks5/proxy:/x"),
+        ("http\\x:/y", "http://http/x:/y"),
+        ("ws/:/x", "http://ws/:/x"),
+        ("ab@http:/x", "http://ab@http/x"),
+        (":pw@http:/x", "http://:pw@http/x"),
+        ("u:pw@http:/x", "http://u:pw@http/x"),
+        ("x@ftp:/y", "http://x@ftp/y"),
+    ];
+
+    for (entry, stored) in entries {
+        let list = ProxyList::new([entry])?;
+
+        assert_eq!(list.iter().collect::<Vec<_>>(), [stored], "{entry:?}");
+    }
+
+    Ok(())
+}
+
+#[test]
+fn the_builder_debug_shows_the_form_the_error_shows() -> Result<(), Box<dyn std::error::Error>> {
+    for (entry, shown) in [
+        ("ws://u:pw@h:8080/path", "ws://***@h:8080/"),
+        ("ftp://user:pw@host:21/path", "ftp://***@host/"),
+    ] {
+        let error = ProxyList::new([entry])
+            .err()
+            .ok_or("the entry was accepted")?;
+        let debug = format!("{:?}", RotatingClient::builder().proxies([entry]));
+
+        assert_eq!(
+            error.to_string(),
+            format!("invalid proxy: {shown}"),
+            "{entry:?}"
+        );
+        assert!(
+            debug.contains(&format!("proxies: [\"{shown}\"]")),
+            "{debug}"
+        );
+    }
+
+    Ok(())
+}

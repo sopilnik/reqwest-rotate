@@ -37,6 +37,8 @@ to the crate and has no `pub use`; `retry` is private except for the two event t
 - A new reqwest feature the crate passes through: a feature in `Cargo.toml` that enables the same feature of `reqwest`,
   and a row in the README feature table.
 - A new example: a file in `examples/`; it must build with the default features.
+- A new fuzz target: a file in `fuzz/fuzz_targets/` and a `[[bin]]` entry in `fuzz/Cargo.toml`. The `fuzz/` crate is a
+  workspace of its own, outside the library's build, and is not packaged (`include` in `Cargo.toml` leaves it out).
 
 ## Invariants that span modules
 
@@ -59,7 +61,7 @@ to the crate and has no `pub use`; `retry` is private except for the two event t
   only when the server provably never acted on the request. A body that cannot be cloned is sent once.
 - Proxy credentials are redacted wherever the crate itself shows a proxy: `Debug` output, error messages,
   `tracing` events, `RetryEvent::proxy`. The accessors that return the stored URL are the exception (see the classes
-  of data). New code that prints a proxy or a URL goes through `redact_userinfo` / `ProxyList::redacted` / `log_url`.
+  of data). New code that prints a proxy or a URL goes through `redact_url` / `ProxyList::redacted` / `log_url`.
 - The library contains no `unsafe` (decision 0004). A URL without a host is keyed by the empty string in the rate
   limiter (decision 0005).
 
@@ -98,12 +100,13 @@ swaps the TLS library.
 - Proxy credentials (the userinfo of a proxy URL): redacted in `Debug` output, error messages, `tracing` events and
   `RetryEvent::proxy`. `ProxyList::pick`, `ProxyList::as_slice` and `ProxyList::iter` hand the canonical URLs back to
   the caller with the credentials, since that is what the client connects with, and their docs say to strip them before
-  logging; `ProxyList::iter_redacted` is the form that is safe to print.
+  logging; `ProxyList::iter_redacted` is the form that is safe to print: scheme, `***@` if there is a user or a
+  password, host and port, never a path, query or fragment.
 - Request URLs: logged without the query string, because a token can travel there. The `reqwest::Error` in an error
   chain prints the full URL, which the `Error` documentation says.
 - Headers the caller adds through `configure(..)`: not redacted unless the caller marks the value sensitive.
 - Request and response bodies: passed through and never logged.
 
 **Secrets.** The crate stores no secret of its own, and the repository holds none either. CI uses only the workflow's
-own `GITHUB_TOKEN`. It is read-only everywhere except the Scorecard job, which may also upload code-scanning results
-(`security-events: write`).
+own `GITHUB_TOKEN`. It is read-only everywhere except the Scorecard and CodeQL jobs, which may also upload code-scanning
+results (`security-events: write`).
