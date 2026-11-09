@@ -6,6 +6,31 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-09
+
+### Security
+
+- A malformed proxy entry, such as `user:password@host://x@y`,
+  `user:1234/password@host` or `user:/password/@x/../y`, could show its
+  password in the `InvalidProxy` error message, in `Debug` output and
+  in tracing events. Errors now hide everything up to the last `@`
+  unless a valid scheme comes first.
+- An entry with extra slashes before the user name, such as
+  `http:///user:password@host`, is still accepted, but could show its
+  password in the `Debug` output of a builder and in an error about its
+  scheme. Both now hide it.
+- The reversed vendor form `host:80@user:123#password` is still
+  accepted, but showed the password in `iter_redacted`, `Debug` output,
+  `tracing` events and the `proxy` of an `on_retry` event. The redacted
+  form no longer has a path, query or fragment to show it in.
+- An entry with a scheme and a single `/` or `\`, such as
+  `http:/1.2.3.4:8080:user:password`, was accepted and showed its
+  password in `iter_redacted`, `Debug` output, `tracing` events and the
+  `proxy` of an `on_retry` event. So did the same entry behind a byte
+  order mark or a zero-width character, or written with full-width
+  letters. These are now rejected (see Changed below), and the error
+  hides the password.
+
 ### Changed
 
 - A proxy entry with an `@` after its host, in a path, query or
@@ -27,22 +52,6 @@ and this project uses [Semantic Versioning](https://semver.org/).
   a `\` in the password of an `http` or `https` entry is to be
   percent-encoded as `%5C`, and `http:host:8080` is to be written with
   `://`.
-
-### Fixed
-
-- A malformed proxy entry, such as `user:password@host://x@y`,
-  `user:1234/password@host` or `user:/password/@x/../y`, could show its
-  password in the `InvalidProxy` error message, in `Debug` output and
-  in tracing events. Errors now hide everything up to the last `@`
-  unless a valid scheme comes first.
-- An entry with extra slashes before the user name, such as
-  `http:///user:password@host`, is still accepted, but could show its
-  password in the `Debug` output of a builder and in an error about its
-  scheme. Both now hide it.
-- The reversed vendor form `host:80@user:123#password` is still
-  accepted, but showed the password in `iter_redacted`, `Debug` output,
-  `tracing` events and the `proxy` of an `on_retry` event. The redacted
-  form no longer has a path, query or fragment to show it in.
 
 ## [0.2.0] - 2026-09-27
 
@@ -233,7 +242,8 @@ Also in this release:
   `socks4a://`, `socks5://` and `socks5h://` proxies, and `tracing`
   emits debug-level events for retries and proxy rotation.
 
-[Unreleased]: https://github.com/sopilnik/reqwest-rotate/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/sopilnik/reqwest-rotate/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/sopilnik/reqwest-rotate/releases/tag/v0.2.1
 [0.2.0]: https://github.com/sopilnik/reqwest-rotate/releases/tag/v0.2.0
 [0.1.1]: https://github.com/sopilnik/reqwest-rotate/releases/tag/v0.1.1
 [0.1.0]: https://github.com/sopilnik/reqwest-rotate/releases/tag/v0.1.0

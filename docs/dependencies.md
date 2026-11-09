@@ -48,3 +48,11 @@ The `fuzz/` crate (`publish = false`, outside the published package, with a `Car
 | Name | Version | Kind | Used for | Why this one | Alternative that lost | Build-time code | Checked |
 |---|---|---|---|---|---|---|---|
 | libfuzzer-sys | 0.4.13 | fuzz crate | The `fuzz_target!` entry point and the bundled libFuzzer that `cargo fuzz` links; `arbitrary` comes with it. | It is the engine `cargo fuzz` is built on, and the Rust fuzzer that OpenSSF Scorecard's fuzzing check detects. | AFL.rs and honggfuzz-rs: separate runners and toolchain setups with no use here beyond what `cargo fuzz` already gives. | A build script that compiles libFuzzer's C++ with `cc` (`cc` is already in the library's lock file). The license is `(MIT OR Apache-2.0) AND NCSA`, accepted for the fuzz crate only in [decision 0007](decisions/0007-libfuzzer-sys-license-in-the-fuzz-crate.md). | 2026-11-08 |
+
+## Release tooling
+
+Used only by `.github/workflows/release.yml`; none of it is part of the published crate or of its lock file.
+
+| Name | Version | Kind | Used for | Why this one | Alternative that lost | Build-time code | Checked |
+|---|---|---|---|---|---|---|---|
+| cargo-cyclonedx | 0.5.9 | release tool, installed with `--locked` | The CycloneDX software bill of materials that is attached to each release and attested. | Maintained by the CycloneDX project, Apache-2.0. 0.5.10 (2026-11-06) was under the seven-day cooldown when this was chosen, so 0.5.9 (2026-03-19) is pinned. Its own lock file carries RUSTSEC-2026-0009 (`time`), accepted for this tool only in [decision 0008](decisions/0008-cargo-cyclonedx-advisory-accepted-for-the-release-tool.md). | `cargo-sbom`: MIT, one maintainer, last release June 2025. | It is built from source on the runner, so every build script and procedural macro in its own tree runs there; it handles no secret and the job holds only `contents: read`. | 2026-11-09 |
