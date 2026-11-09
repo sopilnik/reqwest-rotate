@@ -385,11 +385,14 @@ pub(crate) fn redact_stored(url: &str) -> String {
 }
 
 /// Redacts a proxy entry as the caller wrote it, which may not have been
-/// checked yet: the redaction of the URL it parses to, the worst-case one of
-/// [`redact_unparsable`] for anything else.
+/// checked yet: the redaction of the URL it parses to, the text of the error
+/// that refused it (already redacted, and the same one the caller gets from
+/// `ProxyList::new`), the worst-case redaction of [`redact_unparsable`] for
+/// anything else.
 pub(crate) fn redact_entry(raw: &str) -> String {
     match canonical_proxy_url(raw) {
         Ok(canonical) => redact_stored(&canonical),
+        Err(Error::InvalidProxy { proxy, .. }) => proxy,
         Err(_) => redact_unparsable(raw),
     }
 }
@@ -527,18 +530,6 @@ fn canonical_proxy_url(raw: &str) -> Result<String, Error> {
     // `user:pass@host:port`) is treated as an HTTP proxy. Trying to parse
     // those directly would misread `host` as a scheme, so do not.
     let has_scheme = raw.contains("://");
-    // `http:/host:8080:user:pass` has the scheme of a proxy URL and one slash
-    // too few, and would be read as a host named `http` that never answers.
-    if let Some(name) = scheme_name_before_one_slash(raw).filter(|_| !has_scheme) {
-        // The hint only where writing `://` would be the fix.
-        let reason = if is_supported_scheme(&name) {
-            SCHEME_HINT.to_string()
-        } else {
-            format!("unsupported proxy scheme `{name}`")
-        };
-
-        return Err(Error::invalid_proxy(redact_unparsable(raw), reason));
-    }
     let with_scheme = if has_scheme {
         raw.to_string()
     } else {
@@ -555,6 +546,15 @@ fn canonical_proxy_url(raw: &str) -> Result<String, Error> {
         .ok_or_else(|| {
             Error::invalid_proxy(redact_unparsable(raw), refusal_reason(raw, has_scheme))
         })?;
+
+    // `http:/host:8080:user:pass` has the scheme of a proxy URL and one slash
+    // too few, and would be read as a host named `http` that never answers.
+    if let Some(name) = scheme_before_one_slash(raw, &url).filter(|_| !has_scheme) {
+        return Err(Error::invalid_proxy(
+            redact_unparsable(raw),
+            scheme_reason(&name),
+        ));
+    }
 
     if has_at_after_authority(&with_scheme, url.scheme()) {
         // A user the parser already found is a proxy with credentials, and
@@ -594,17 +594,36 @@ fn refusal_reason(raw: &str, has_scheme: bool) -> &'static str {
     }
 }
 
-/// The lowercase scheme name when the entry starts with one of a supported or
-/// special scheme (any case), a `:` and a `/` or `\`: a scheme followed by one
-/// slash or a backslash. `http:8080` and `http:secret@host` have no slash and
-/// are a host and a user, and `http-proxy.example:3128` is not the name.
-fn scheme_name_before_one_slash(raw: &str) -> Option<String> {
-    let text = without_ignored_characters(raw);
-    let (name, rest) = text.split_once(':')?;
-    let name = name.to_ascii_lowercase();
-    let named = is_supported_scheme(&name) || is_special_scheme(&name);
+/// Why an entry that starts with a scheme name and one slash is refused: the
+/// hint only where writing `://` would be the fix.
+fn scheme_reason(name: &str) -> String {
+    if is_supported_scheme(name) {
+        SCHEME_HINT.to_string()
+    } else {
+        format!("unsupported proxy scheme `{name}`")
+    }
+}
 
-    (named && rest.starts_with(['/', '\\'])).then_some(name)
+/// The name of a supported or special scheme when the entry, which has no
+/// `://`, is that name and a `:` followed by a `/` or a `\`: a scheme followed
+/// by one slash or a backslash, which the parser reads as a bare host of that
+/// name (`http:/1.2.3.4:8080:user:pass`). It is decided on the parsed host, so
+/// the name may be written with a character the host mapping drops or folds
+/// (U+FEFF, U+00AD, U+200B, full-width letters). `http:8080`,
+/// `http:secret@host` and `http-proxy.example:3128` have no slash right after
+/// the name, and `ab@http:/x` has a user: they are not this typo.
+fn scheme_before_one_slash(raw: &str, url: &reqwest::Url) -> Option<String> {
+    let host = url.host_str().unwrap_or_default();
+    let named = is_supported_scheme(host) || is_special_scheme(host);
+    let bare = url.username().is_empty() && url.password().is_none();
+    let text = without_ignored_characters(raw);
+    // The `:` is the one right after the name: `http/a:/b` is a host and a
+    // path, not this typo.
+    let slash = text.split_once(':').is_some_and(|(name, rest)| {
+        !name.contains(['/', '\\', '?', '#']) && rest.starts_with(['/', '\\'])
+    });
+
+    (named && bare && slash).then(|| host.to_string())
 }
 
 /// The schemes the crate accepts.
@@ -616,7 +635,7 @@ fn is_supported_scheme(scheme: &str) -> bool {
 }
 
 /// Whether the entry, which has no `://`, starts with a scheme and a single
-/// `:` and would be accepted with `://` in its place: `http:/user:pw@host`.
+/// `:` and would be accepted with `://` in its place: `http:host:8080`.
 fn accepted_with_scheme_separator(raw: &str) -> bool {
     let text = without_ignored_characters(raw);
     let Some((scheme, rest)) = text.split_once(':') else {
@@ -624,17 +643,8 @@ fn accepted_with_scheme_separator(raw: &str) -> bool {
     };
     // The schemes the crate accepts; any other would be refused for its
     // scheme with or without the `://`.
-    let named = matches!(
-        scheme.to_ascii_lowercase().as_str(),
-        "http" | "https" | "socks4" | "socks4a" | "socks5" | "socks5h"
-    );
-
-    named
-        && canonical_proxy_url(&format!(
-            "{scheme}://{}",
-            rest.trim_start_matches(['/', '\\'])
-        ))
-        .is_ok()
+    is_supported_scheme(&scheme.to_ascii_lowercase())
+        && canonical_proxy_url(&format!("{scheme}://{rest}")).is_ok()
 }
 
 /// The hint for an entry that `canonical_proxy_url` would accept if the `/`,

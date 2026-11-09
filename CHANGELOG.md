@@ -12,14 +12,21 @@ and this project uses [Semantic Versioning](https://semver.org/).
   fragment, is now rejected: in most such entries the `@` belongs to a
   password the parser read as a path, so the request went to another
   host.
-- A proxy entry that starts with a scheme name, a `:` and a single `/`
-  or `\`, such as `http:/1.2.3.4:8080:user:password`, is now rejected:
-  it was stored as a proxy at a host named `http`, which never
-  answered.
+- A proxy entry that starts with the name of a supported scheme, or of
+  `ftp`, `ws`, `wss` or `file`, a `:` and a single `/` or `\`, such as
+  `http:/1.2.3.4:8080:user:password`, is now rejected: it was stored as
+  a proxy at a host named `http`, which never answered. For `ftp`,
+  `ws`, `wss` and `file` the error is the one for an unsupported
+  scheme.
 - A redacted proxy, in `ProxyList::iter_redacted`, `Debug` output,
-  `tracing` events and the `proxy` of an `on_retry` event, now reads
+  `tracing` events, the `proxy` of an `on_retry` event and the `proxy`
+  of an `InvalidProxy` error about a parsed entry, now reads
   `scheme://host:port/`, with `***@` before the host when the URL has a
   user or a password. The path, query and fragment are left out.
+- The error for a refused entry says what to change in two more cases:
+  a `\` in the password of an `http` or `https` entry is to be
+  percent-encoded as `%5C`, and `http:host:8080` is to be written with
+  `://`.
 
 ### Fixed
 
@@ -32,12 +39,10 @@ and this project uses [Semantic Versioning](https://semver.org/).
   `http:///user:password@host`, is still accepted, but could show its
   password in the `Debug` output of a builder and in an error about its
   scheme. Both now hide it.
-- A vendor line with a scheme typo, such as
-  `http:/1.2.3.4:8080:user:password`, and the reversed form
-  `host:80@user:123#password` are still accepted, but showed the
-  password in `iter_redacted`, `Debug` output, `tracing` events and the
-  `proxy` of an `on_retry` event. The redacted form no longer has a
-  path, query or fragment to show it in.
+- The reversed vendor form `host:80@user:123#password` is still
+  accepted, but showed the password in `iter_redacted`, `Debug` output,
+  `tracing` events and the `proxy` of an `on_retry` event. The redacted
+  form no longer has a path, query or fragment to show it in.
 
 ## [0.2.0] - 2026-09-27
 

@@ -1276,6 +1276,10 @@ fn a_scheme_followed_by_one_slash_or_a_backslash_is_refused_and_hidden()
         "HTTP:/1.2.3.4:8080:user:pw-7f3a9c1e",
         "HtTpS:\\1.2.3.4:8080:user:pw-7f3a9c1e",
         "\u{a0} http:/1.2.3.4:8080:user:pw-7f3a9c1e",
+        "\u{feff}http:/1.2.3.4:8080:user:pw-7f3a9c1e",
+        "\u{ad}http:/1.2.3.4:8080:user:pw-7f3a9c1e",
+        "ht\u{200b}tp:/1.2.3.4:8080:user:pw-7f3a9c1e",
+        "\u{ff48}\u{ff54}\u{ff54}\u{ff50}:/1.2.3.4:8080:user:pw-7f3a9c1e",
     ];
 
     for entry in entries {
@@ -1341,12 +1345,48 @@ fn a_host_that_starts_like_a_scheme_is_still_accepted() -> Result<(), Box<dyn st
         ("http:8080/x", "http://http:8080/x"),
         ("http:secret@host:8080", "http://http:secret@host:8080/"),
         ("[::1]:3128", "http://[::1]:3128/"),
+        ("http/a:/b", "http://http/a:/b"),
+        ("http?x:/y", "http://http/?x:/y"),
+        ("http#:/x", "http://http/#:/x"),
+        ("https?u=:/x", "http://https/?u=:/x"),
+        ("socks5/proxy:/x", "http://socks5/proxy:/x"),
+        ("http\\x:/y", "http://http/x:/y"),
+        ("ws/:/x", "http://ws/:/x"),
+        ("ab@http:/x", "http://ab@http/x"),
+        (":pw@http:/x", "http://:pw@http/x"),
+        ("u:pw@http:/x", "http://u:pw@http/x"),
+        ("x@ftp:/y", "http://x@ftp/y"),
     ];
 
     for (entry, stored) in entries {
         let list = ProxyList::new([entry])?;
 
         assert_eq!(list.iter().collect::<Vec<_>>(), [stored], "{entry:?}");
+    }
+
+    Ok(())
+}
+
+#[test]
+fn the_builder_debug_shows_the_form_the_error_shows() -> Result<(), Box<dyn std::error::Error>> {
+    for (entry, shown) in [
+        ("ws://u:pw@h:8080/path", "ws://***@h:8080/"),
+        ("ftp://user:pw@host:21/path", "ftp://***@host/"),
+    ] {
+        let error = ProxyList::new([entry])
+            .err()
+            .ok_or("the entry was accepted")?;
+        let debug = format!("{:?}", RotatingClient::builder().proxies([entry]));
+
+        assert_eq!(
+            error.to_string(),
+            format!("invalid proxy: {shown}"),
+            "{entry:?}"
+        );
+        assert!(
+            debug.contains(&format!("proxies: [\"{shown}\"]")),
+            "{debug}"
+        );
     }
 
     Ok(())
