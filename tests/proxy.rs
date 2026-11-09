@@ -979,6 +979,7 @@ fn a_scheme_with_one_slash_gets_the_scheme_hint() -> Result<(), Box<dyn std::err
         "invalid proxy: ***@host:8443",
         SCHEME_HINT,
     )?;
+    assert_refused_with("http:1.2.3.4:8080", "invalid proxy: http:***", SCHEME_HINT)?;
     // Encoding or fixing the slashes would not make this one valid.
     assert_refused_with(
         "http:user:secret@host:99999",
@@ -1252,6 +1253,94 @@ fn a_scheme_with_one_slash_and_a_later_separator_is_still_accepted()
         ("http:/u:pw@h/x://y", "http://u:pw@h/x://y"),
         ("http:\\\\u:secret@h://", "http://u:secret@h//"),
         ("https:/u:pw@h:8443/a://b", "https://u:pw@h:8443/a://b"),
+    ];
+
+    for (entry, stored) in entries {
+        let list = ProxyList::new([entry])?;
+
+        assert_eq!(list.iter().collect::<Vec<_>>(), [stored], "{entry:?}");
+    }
+
+    Ok(())
+}
+
+#[test]
+fn a_scheme_followed_by_one_slash_or_a_backslash_is_refused_and_hidden()
+-> Result<(), Box<dyn std::error::Error>> {
+    let entries = [
+        "http:/1.2.3.4:8080:user:pw-7f3a9c1e",
+        "https:/1.2.3.4:8080:user:pw-7f3a9c1e",
+        "socks5:/h:1080:user:pw-7f3a9c1e",
+        "http:\\\\1.2.3.4:8080:user:pw-7f3a9c1e",
+        "http:/\\1.2.3.4:8080:user:pw-7f3a9c1e",
+        "HTTP:/1.2.3.4:8080:user:pw-7f3a9c1e",
+        "HtTpS:\\1.2.3.4:8080:user:pw-7f3a9c1e",
+        "\u{a0} http:/1.2.3.4:8080:user:pw-7f3a9c1e",
+    ];
+
+    for entry in entries {
+        let error = ProxyList::new([entry])
+            .err()
+            .ok_or("the entry was accepted")?;
+        let source = std::error::Error::source(&error)
+            .ok_or("no source")?
+            .to_string();
+
+        assert_eq!(source, SCHEME_HINT, "{entry:?}");
+        for text in texts_about_entry(entry) {
+            assert!(
+                !text.contains("pw-7f3a9c1e"),
+                "{entry:?} shows its password in {text:?}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn a_scheme_the_crate_never_accepts_gets_the_scheme_reason_not_the_hint()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (entry, scheme) in [
+        ("ftp:/h:21:user:pw-7f3a9c1e", "ftp"),
+        ("WS:\\h:80:user:pw-7f3a9c1e", "ws"),
+        ("wss:/h:80:user:pw-7f3a9c1e", "wss"),
+        ("file:/h:80:user:pw-7f3a9c1e", "file"),
+    ] {
+        let error = ProxyList::new([entry])
+            .err()
+            .ok_or("the entry was accepted")?;
+        let source = std::error::Error::source(&error)
+            .ok_or("no source")?
+            .to_string();
+
+        assert_eq!(
+            source,
+            format!("unsupported proxy scheme `{scheme}`"),
+            "{entry:?}"
+        );
+        for text in texts_about_entry(entry) {
+            assert!(
+                !text.contains("pw-7f3a9c1e"),
+                "{entry:?} shows its password in {text:?}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn a_host_that_starts_like_a_scheme_is_still_accepted() -> Result<(), Box<dyn std::error::Error>> {
+    let entries = [
+        ("host:8080", "http://host:8080/"),
+        ("localhost:8080", "http://localhost:8080/"),
+        ("http-proxy.example:3128", "http://http-proxy.example:3128/"),
+        ("socks5.example:1080", "http://socks5.example:1080/"),
+        ("http:8080", "http://http:8080/"),
+        ("http:8080/x", "http://http:8080/x"),
+        ("http:secret@host:8080", "http://http:secret@host:8080/"),
+        ("[::1]:3128", "http://[::1]:3128/"),
     ];
 
     for (entry, stored) in entries {

@@ -12,6 +12,10 @@ and this project uses [Semantic Versioning](https://semver.org/).
   fragment, is now rejected: in most such entries the `@` belongs to a
   password the parser read as a path, so the request went to another
   host.
+- A proxy entry that starts with a scheme name, a `:` and a single `/`
+  or `\`, such as `http:/1.2.3.4:8080:user:password`, is now rejected:
+  it was stored as a proxy at a host named `http`, which never
+  answered.
 - A redacted proxy, in `ProxyList::iter_redacted`, `Debug` output,
   `tracing` events and the `proxy` of an `on_retry` event, now reads
   `scheme://host:port/`, with `***@` before the host when the URL has a

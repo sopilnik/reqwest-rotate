@@ -527,6 +527,18 @@ fn canonical_proxy_url(raw: &str) -> Result<String, Error> {
     // `user:pass@host:port`) is treated as an HTTP proxy. Trying to parse
     // those directly would misread `host` as a scheme, so do not.
     let has_scheme = raw.contains("://");
+    // `http:/host:8080:user:pass` has the scheme of a proxy URL and one slash
+    // too few, and would be read as a host named `http` that never answers.
+    if let Some(name) = scheme_name_before_one_slash(raw).filter(|_| !has_scheme) {
+        // The hint only where writing `://` would be the fix.
+        let reason = if is_supported_scheme(&name) {
+            SCHEME_HINT.to_string()
+        } else {
+            format!("unsupported proxy scheme `{name}`")
+        };
+
+        return Err(Error::invalid_proxy(redact_unparsable(raw), reason));
+    }
     let with_scheme = if has_scheme {
         raw.to_string()
     } else {
@@ -580,6 +592,27 @@ fn refusal_reason(raw: &str, has_scheme: bool) -> &'static str {
     } else {
         "not a valid proxy URL"
     }
+}
+
+/// The lowercase scheme name when the entry starts with one of a supported or
+/// special scheme (any case), a `:` and a `/` or `\`: a scheme followed by one
+/// slash or a backslash. `http:8080` and `http:secret@host` have no slash and
+/// are a host and a user, and `http-proxy.example:3128` is not the name.
+fn scheme_name_before_one_slash(raw: &str) -> Option<String> {
+    let text = without_ignored_characters(raw);
+    let (name, rest) = text.split_once(':')?;
+    let name = name.to_ascii_lowercase();
+    let named = is_supported_scheme(&name) || is_special_scheme(&name);
+
+    (named && rest.starts_with(['/', '\\'])).then_some(name)
+}
+
+/// The schemes the crate accepts.
+fn is_supported_scheme(scheme: &str) -> bool {
+    matches!(
+        scheme,
+        "http" | "https" | "socks4" | "socks4a" | "socks5" | "socks5h"
+    )
 }
 
 /// Whether the entry, which has no `://`, starts with a scheme and a single
