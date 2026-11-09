@@ -9,8 +9,13 @@ and this project uses [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - A proxy entry with an `@` after its host, in a path, query or
-  fragment, is now rejected: `ProxyList::new` took it before, but it
-  never pointed at the proxy that was meant.
+  fragment, is now rejected: in most such entries the `@` belongs to a
+  password the parser read as a path, so the request went to another
+  host.
+- A redacted proxy, in `ProxyList::iter_redacted`, `Debug` output,
+  `tracing` events and the `proxy` of an `on_retry` event, now reads
+  `scheme://host:port/`, with `***@` before the host when the URL has a
+  user or a password. The path, query and fragment are left out.
 
 ### Fixed
 
@@ -23,6 +28,12 @@ and this project uses [Semantic Versioning](https://semver.org/).
   `http:///user:password@host`, is still accepted, but could show its
   password in the `Debug` output of a builder and in an error about its
   scheme. Both now hide it.
+- A vendor line with a scheme typo, such as
+  `http:/1.2.3.4:8080:user:password`, and the reversed form
+  `host:80@user:123#password` are still accepted, but showed the
+  password in `iter_redacted`, `Debug` output, `tracing` events and the
+  `proxy` of an `on_retry` event. The redacted form no longer has a
+  path, query or fragment to show it in.
 
 ## [0.2.0] - 2026-09-27
 

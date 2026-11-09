@@ -1221,7 +1221,7 @@ impl RotatingClientBuilder {
                     // its own proxy URL parsing past ours.
                     let proxy = reqwest::Proxy::all(proxy_url).map_err(|e| {
                         Error::InvalidProxy {
-                            proxy: crate::proxy::redact_userinfo(proxy_url),
+                            proxy: crate::proxy::redact_stored(proxy_url),
                             // `without_url` drops the URL reqwest would
                             // otherwise attach to some of its own errors
                             // and echo back in `Display`/`Debug`, which

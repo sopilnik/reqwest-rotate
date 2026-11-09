@@ -27,6 +27,6 @@ test = false
 doc = false
 bench = false
 
-# Keeps cargo from treating this as a member of a workspace above it, and
-# keeps the root package's lockfile and lint table out of the fuzz build.
+# Its own workspace, so that a workspace higher up (the root, should it become
+# one) never claims this crate.
 [workspace]

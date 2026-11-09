@@ -129,12 +129,13 @@ impl ProxyList {
         self.proxies.iter().map(String::as_str)
     }
 
-    /// All configured proxy URLs, canonicalised and in rotation order, with
-    /// any `user:password@` replaced by `***@`: the same redaction
-    /// [`Debug`](std::fmt::Debug) output and `tracing` events use, safe to
-    /// log or print directly.
+    /// All configured proxies in rotation order as `scheme://host:port/`,
+    /// with `***@` before the host when the URL has a user or a password.
+    /// The path, query and fragment are left out, and so is a default port.
+    /// It is the same form [`Debug`](std::fmt::Debug) output and `tracing`
+    /// events use, safe to log or print directly.
     pub fn iter_redacted(&self) -> impl Iterator<Item = String> + '_ {
-        self.proxies.iter().map(|p| redact_userinfo(p))
+        self.proxies.iter().map(|p| redact_stored(p))
     }
 
     /// Index of `proxy`, accepting either the canonical form or anything
@@ -146,10 +147,11 @@ impl ProxyList {
         })
     }
 
-    /// The proxy at `idx` with any `user:password@` replaced by `***@`,
-    /// for logs and for the proxy field of an `on_retry` event.
+    /// The proxy at `idx` in the redacted form of
+    /// [`iter_redacted`](Self::iter_redacted), for logs and for the proxy
+    /// field of an `on_retry` event.
     pub(crate) fn redacted(&self, idx: usize) -> String {
-        redact_userinfo(&self.proxies[idx])
+        redact_stored(&self.proxies[idx])
     }
 
     /// Picks the next proxy in round-robin order, skipping proxies that are
@@ -334,7 +336,7 @@ impl ProxyList {
 
 impl fmt::Debug for ProxyList {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let redacted: Vec<String> = self.proxies.iter().map(|p| redact_userinfo(p)).collect();
+        let redacted: Vec<String> = self.proxies.iter().map(|p| redact_stored(p)).collect();
         let in_cooldown: Vec<&str> = {
             let state = self.lock();
             let now = Instant::now();
@@ -352,36 +354,42 @@ impl fmt::Debug for ProxyList {
     }
 }
 
-/// Replaces `user:password@` in a proxy URL with `***@` so credentials
-/// never end up in logs, error messages, or `Debug` output, whether or
-/// not the URL has a scheme, and even when the password itself contains
-/// `@` or `://`.
-pub(crate) fn redact_userinfo(url: &str) -> String {
-    let url = without_ignored_characters(url);
-    let (scheme, rest) = split_scheme(&url);
-    // Slashes before the authority are skipped, as the parser skips them
-    // after a special scheme: `http:///user:pw@host` is user `user`.
-    let rest = rest.trim_start_matches(['/', '\\']);
-    // Userinfo can only live in the authority, which ends at the first
-    // `/`, `?` or `#`; its separator is the *last* `@` there, because an
-    // `@` inside the password is legal input (the url crate escapes it).
-    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let (authority, tail) = rest.split_at(authority_end);
-    let Some((_, host)) = authority.rsplit_once('@') else {
-        return url;
+/// The one form in which a parsed proxy appears in any text this crate
+/// produces: `scheme://`, then `***@` when the URL has a user or a password,
+/// the host, the port when it is not the scheme's default, and `/`. The path,
+/// query and fragment are never shown: a proxy URL does not use them, and an
+/// entry the parser read differently from how it was meant (a password after
+/// a stray `/`, `?` or `#`) keeps its secret there.
+pub(crate) fn redact_url(url: &reqwest::Url) -> String {
+    let userinfo = if url.username().is_empty() && url.password().is_none() {
+        ""
+    } else {
+        "***@"
     };
-    match scheme {
-        Some(scheme) => format!("{scheme}://***@{host}{tail}"),
-        None => format!("***@{host}{tail}"),
+    let host = url.host_str().unwrap_or_default();
+    let port = url
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+
+    format!("{}://{userinfo}{host}{port}/", url.scheme())
+}
+
+/// [`redact_url`] for a URL kept as text, which `canonical_proxy_url` has
+/// parsed once already.
+pub(crate) fn redact_stored(url: &str) -> String {
+    match reqwest::Url::parse(url) {
+        Ok(url) => redact_url(&url),
+        Err(_) => redact_unparsable(url),
     }
 }
 
 /// Redacts a proxy entry as the caller wrote it, which may not have been
-/// checked yet: the redaction of a URL that parses, the worst-case one of
+/// checked yet: the redaction of the URL it parses to, the worst-case one of
 /// [`redact_unparsable`] for anything else.
 pub(crate) fn redact_entry(raw: &str) -> String {
     match canonical_proxy_url(raw) {
-        Ok(_) => redact_userinfo(raw),
+        Ok(canonical) => redact_stored(&canonical),
         Err(_) => redact_unparsable(raw),
     }
 }
@@ -398,26 +406,35 @@ fn redact_unparsable(raw: &str) -> String {
         let (scheme, rest) = split_scheme(&raw);
         let prefix = scheme.map_or_else(String::new, |scheme| format!("{scheme}://"));
         return match rest.split_once(':') {
-            Some((host, _)) => format!("{prefix}{host}:***"),
-            None => raw,
+            Some((host, _)) => format!("{prefix}{}:***", without_path(host)),
+            None => format!("{prefix}{}", without_path(rest)),
         };
     };
+    // What follows the last `@` is the host and port as far as the entry has
+    // them. `host:port@user:pass`, as some vendors write it, puts a password
+    // there, so anything after its first `:` that is not a port number is
+    // hidden. A path, query or fragment is never shown, as for a parsed entry.
     let tail = &raw[at + 1..];
-    // `host:port@user:pass`, as some vendors write it: what follows the
-    // last `@` is then no host and port, so anything after its first `:`
-    // that is not a port number is hidden too.
     let tail = match tail.split_once(':') {
         Some((host, port)) if !port.bytes().all(|b| b.is_ascii_digit()) => {
             format!("{host}:***")
         }
         _ => tail.to_string(),
     };
+    let tail = without_path(&tail);
     // A scheme is only what comes before the first `://` when it is a valid
     // one; anything else there, an `@` or a `:` included, is credentials.
     let prefix = split_scheme(&raw[..at])
         .0
         .map_or_else(String::new, |scheme| format!("{scheme}://"));
     format!("{prefix}***@{tail}")
+}
+
+/// The text up to the first `/`, `?`, `#` or `\`: the host and port of an
+/// entry without its path, query and fragment.
+fn without_path(text: &str) -> &str {
+    text.find(['/', '?', '#', '\\'])
+        .map_or(text, |end| &text[..end])
 }
 
 /// Splits `scheme://rest`, but only when what precedes the first `://`
@@ -453,20 +470,27 @@ fn without_ignored_characters(text: &str) -> String {
 /// Whether the entry, as written, holds an `@` after its authority, in a path,
 /// query or fragment. Such an entry is credentials the parser read as
 /// something else (`user:1234/secret@host` is host `user`, port 1234 and a
-/// path), so it never reached the proxy the caller meant, and the redaction of
-/// a stored URL, which looks for the `@` in the authority only, would show it
-/// whole. It is decided on the text, not on the parsed URL: normalisation
-/// drops the segment that carries the `@` from `user:/secret/@x/../y`.
-fn has_at_after_authority(entry: &str, special_scheme: bool) -> bool {
+/// path), so it never reached the proxy the caller meant. It is decided on
+/// the text, not on the parsed URL: normalisation drops the segment that
+/// carries the `@` from `user:/secret/@x/../y`. `entry` is the text handed to
+/// the parser, so its scheme ends at the first `:`, and `scheme` is the one
+/// the parser found there.
+fn has_at_after_authority(entry: &str, scheme: &str) -> bool {
     let text = without_ignored_characters(entry);
-    let (_, rest) = split_scheme(&text);
+    let after_scheme = text.split_once(':').map_or("", |(_, rest)| rest);
     // The parser skips the slashes that follow a special scheme and ends the
     // authority at the first of these, a `\` included, so the text is read
-    // the same way.
-    let (rest, delimiters): (&str, &[char]) = if special_scheme {
-        (rest.trim_start_matches(['/', '\\']), &['/', '?', '#', '\\'])
+    // the same way. Any other scheme has its `//` and nothing more.
+    let (rest, delimiters): (&str, &[char]) = if is_special_scheme(scheme) {
+        (
+            after_scheme.trim_start_matches(['/', '\\']),
+            &['/', '?', '#', '\\'],
+        )
     } else {
-        (rest, &['/', '?', '#'])
+        (
+            after_scheme.strip_prefix("//").unwrap_or(after_scheme),
+            &['/', '?', '#'],
+        )
     };
     let end = rest.find(delimiters);
 
@@ -480,6 +504,8 @@ fn is_special_scheme(scheme: &str) -> bool {
 
 const PERCENT_ENCODE_HINT: &str =
     "not a valid proxy URL; percent-encode `/`, `?` and `#` in the password (`%2F`, `%3F`, `%23`)";
+const PERCENT_ENCODE_HINT_SPECIAL: &str = "not a valid proxy URL; percent-encode `/`, `?`, `#` and `\\` in the password (`%2F`, `%3F`, `%23`, `%5C`)";
+const SCHEME_HINT: &str = "not a valid proxy URL; a scheme is followed by `://`";
 
 /// Validates a proxy URL and brings it into the canonical form `reqwest`
 /// expects: lowercase scheme and host, default port dropped, trailing `/`.
@@ -508,11 +534,9 @@ fn canonical_proxy_url(raw: &str) -> Result<String, Error> {
     };
     // Never interpolate `raw` itself into an error message below: it may
     // carry `user:pass@`, and errors must not surface proxy credentials
-    // any more than Debug output does. Redacting `raw` rather than
-    // `with_scheme` keeps the message in the caller's own spelling. Input
-    // the parser rejects goes through `redact_unparsable` instead, which
-    // assumes the worst about where the credentials end.
-    let shown = redact_userinfo(raw);
+    // any more than Debug output does. Input the parser rejects goes through
+    // `redact_unparsable`, which assumes the worst about where the
+    // credentials end; a URL it accepts is shown by `redact_url`.
     let url = reqwest::Url::parse(&with_scheme)
         .ok()
         .filter(reqwest::Url::has_host)
@@ -520,14 +544,19 @@ fn canonical_proxy_url(raw: &str) -> Result<String, Error> {
             Error::invalid_proxy(redact_unparsable(raw), refusal_reason(raw, has_scheme))
         })?;
 
-    if has_at_after_authority(&with_scheme, is_special_scheme(url.scheme())) {
-        return Err(Error::invalid_proxy(
-            redact_unparsable(raw),
-            refusal_reason(raw, has_scheme),
-        ));
+    if has_at_after_authority(&with_scheme, url.scheme()) {
+        // A user the parser already found is a proxy with credentials, and
+        // nothing to encode would change which one.
+        let reason = if url.username().is_empty() {
+            refusal_reason(raw, has_scheme)
+        } else {
+            "not a valid proxy URL"
+        };
+
+        return Err(Error::invalid_proxy(redact_unparsable(raw), reason));
     }
 
-    check_scheme(url.scheme(), &shown)?;
+    check_scheme(url.scheme(), &redact_url(&url))?;
     Ok(url.to_string())
 }
 
@@ -544,44 +573,86 @@ fn refusal_reason(raw: &str, has_scheme: bool) -> &'static str {
 
     if vendor_spelling {
         "not a valid proxy URL; write `host:port:user:pass` as `http://user:pass@host:port`"
-    } else if accepted_once_delimiters_are_encoded(raw) {
-        PERCENT_ENCODE_HINT
+    } else if !has_scheme && accepted_with_scheme_separator(raw) {
+        SCHEME_HINT
+    } else if let Some(hint) = delimiter_hint(raw) {
+        hint
     } else {
         "not a valid proxy URL"
     }
 }
 
-/// Whether `canonical_proxy_url` would accept the entry if the `/`, `?` and
-/// `#` before its last `@` were percent-encoded, which is the fix the hint
-/// names. Testing it by accepting the encoded entry keeps the hint off
-/// entries that would still be refused, for a port out of range or an
-/// unsupported scheme, say. It calls `canonical_proxy_url` again, one level
-/// deep: the encoded entry has no `/`, `?` or `#` left before its last `@`.
-fn accepted_once_delimiters_are_encoded(raw: &str) -> bool {
+/// Whether the entry, which has no `://`, starts with a scheme and a single
+/// `:` and would be accepted with `://` in its place: `http:/user:pw@host`.
+fn accepted_with_scheme_separator(raw: &str) -> bool {
     let text = without_ignored_characters(raw);
-    let (scheme, rest) = split_scheme(&text);
-    let Some(at) = rest.rfind('@') else {
+    let Some((scheme, rest)) = text.split_once(':') else {
         return false;
     };
+    // The schemes the crate accepts; any other would be refused for its
+    // scheme with or without the `://`.
+    let named = matches!(
+        scheme.to_ascii_lowercase().as_str(),
+        "http" | "https" | "socks4" | "socks4a" | "socks5" | "socks5h"
+    );
+
+    named
+        && canonical_proxy_url(&format!(
+            "{scheme}://{}",
+            rest.trim_start_matches(['/', '\\'])
+        ))
+        .is_ok()
+}
+
+/// The hint for an entry that `canonical_proxy_url` would accept if the `/`,
+/// `?` and `#` before its last `@` (and `\` for a special scheme) were
+/// percent-encoded, which is the fix the hint names. Testing it by accepting
+/// the encoded entry keeps the hint off entries that would still be refused,
+/// for a port out of range or an unsupported scheme, say. It calls
+/// `canonical_proxy_url` again, one level deep: the encoded entry has none of
+/// those characters left before its last `@`.
+fn delimiter_hint(raw: &str) -> Option<&'static str> {
+    let text = without_ignored_characters(raw);
+    let (scheme, rest) = split_scheme(&text);
+    let special = scheme.is_none_or(|scheme| is_special_scheme(&scheme.to_ascii_lowercase()));
+    let delimiters: &[char] = if special {
+        &['/', '?', '#', '\\']
+    } else {
+        &['/', '?', '#']
+    };
+    let at = rest.rfind('@')?;
     let (userinfo, host) = rest.split_at(at);
     // Slashes right after the scheme are a typo the parser skips, not part of
     // the password; they stay as they are, so the entry is still refused.
-    let password = userinfo.trim_start_matches(['/', '\\']);
-    if !password.contains(['/', '?', '#']) {
-        return false;
+    let password_start = userinfo
+        .find(|c: char| !matches!(c, '/' | '\\'))
+        .unwrap_or(userinfo.len());
+    let (slashes, password) = userinfo.split_at(password_start);
+    if !password.contains(delimiters) {
+        return None;
     }
 
-    let slashes = &userinfo[..userinfo.len() - password.len()];
     let encoded = password
         .replace('/', "%2F")
         .replace('?', "%3F")
         .replace('#', "%23");
+    let encoded = if special {
+        encoded.replace('\\', "%5C")
+    } else {
+        encoded
+    };
     let fixed = match scheme {
         Some(scheme) => format!("{scheme}://{slashes}{encoded}{host}"),
         None => format!("{slashes}{encoded}{host}"),
     };
 
-    canonical_proxy_url(&fixed).is_ok()
+    canonical_proxy_url(&fixed).ok()?;
+
+    Some(if special {
+        PERCENT_ENCODE_HINT_SPECIAL
+    } else {
+        PERCENT_ENCODE_HINT
+    })
 }
 
 fn check_scheme(scheme: &str, shown: &str) -> Result<(), Error> {

@@ -174,8 +174,10 @@ pub struct RetryEvent {
     pub attempt: u32,
     /// Why the attempt is being retried.
     pub reason: RetryReason,
-    /// The proxy that carried the failed attempt, with any
-    /// `user:password@` replaced by `***@`. `None` for a direct request.
+    /// The proxy that carried the failed attempt as `scheme://host:port/`,
+    /// with `***@` before the host when it has a user or a password, as
+    /// [`ProxyList::iter_redacted`](crate::ProxyList::iter_redacted) shows
+    /// it. `None` for a direct request.
     pub proxy: Option<String>,
     /// The host the failed attempt was sent to. `None` only if the request
     /// URL somehow carries no host, which a client built by this crate

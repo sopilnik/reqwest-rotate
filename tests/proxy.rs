@@ -909,6 +909,20 @@ fn a_proxy_password_never_shows_up_in_any_text_about_the_entry() {
         "http://user:pw-7f3a9c1e@ho\u{ff20}st",
         "http://user:pw-7f3a9c1e@%68ost",
         "HTTP://user:pw-7f3a9c1e@HOST:80",
+        "http:/1.2.3.4:8080:user:pw-7f3a9c1e",
+        "https:/1.2.3.4:8080:user:pw-7f3a9c1e",
+        "socks5:/h:1080:user:pw-7f3a9c1e",
+        "http:\\\\1.2.3.4:8080:user:pw-7f3a9c1e",
+        "http:/\\1.2.3.4:8080:user:pw-7f3a9c1e",
+        "proxy.example:8080@alice:123#pw-7f3a9c1e",
+        "proxy.example:8080@alice:/pw-7f3a9c1e",
+        "proxy.example:8080@alice:?pw-7f3a9c1e",
+        "proxy.example:8080@alice:12/pw-7f3a9c1e",
+        "host:80@u:12?pw-7f3a9c1e#x",
+        "http://host:8080/pw-7f3a9c1e?pw-7f3a9c1e#pw-7f3a9c1e",
+        "http://user:x@host:8080/pw-7f3a9c1e?q=pw-7f3a9c1e#pw-7f3a9c1e",
+        "http:/u:pw-7f3a9c1e@h/x://y",
+        "http:\\\\u:pw-7f3a9c1e@h://",
         "http:///user:pw-7f3a9c1e@host",
         "https:////user:pw-7f3a9c1e@host",
         "socks5:///user:pw-7f3a9c1e@host:1080",
@@ -929,6 +943,8 @@ fn a_proxy_password_never_shows_up_in_any_text_about_the_entry() {
 
 const PERCENT_ENCODE_HINT: &str =
     "not a valid proxy URL; percent-encode `/`, `?` and `#` in the password (`%2F`, `%3F`, `%23`)";
+const PERCENT_ENCODE_HINT_SPECIAL: &str = "not a valid proxy URL; percent-encode `/`, `?`, `#` and `\\` in the password (`%2F`, `%3F`, `%23`, `%5C`)";
+const SCHEME_HINT: &str = "not a valid proxy URL; a scheme is followed by `://`";
 
 #[test]
 fn an_at_sign_after_the_host_is_refused_and_hidden() {
@@ -940,7 +956,6 @@ fn an_at_sign_after_the_host_is_refused_and_hidden() {
             "http://user:1234/secret@host:80",
             "invalid proxy: http://***@host:80",
         ),
-        ("http:/user:secret@host", "invalid proxy: ***@host"),
     ];
 
     for (entry, message) in refused {
@@ -948,8 +963,71 @@ fn an_at_sign_after_the_host_is_refused_and_hidden() {
         let reason = std::error::Error::source(&error).unwrap().to_string();
 
         assert_eq!(error.to_string(), message, "{entry}");
-        assert_eq!(reason, PERCENT_ENCODE_HINT, "{entry}");
+        assert_eq!(reason, PERCENT_ENCODE_HINT_SPECIAL, "{entry}");
     }
+}
+
+#[test]
+fn a_scheme_with_one_slash_gets_the_scheme_hint() -> Result<(), Box<dyn std::error::Error>> {
+    assert_refused_with(
+        "http:/user:secret@host",
+        "invalid proxy: ***@host",
+        SCHEME_HINT,
+    )?;
+    assert_refused_with(
+        "https:\\user:secret@host:8443",
+        "invalid proxy: ***@host:8443",
+        SCHEME_HINT,
+    )?;
+    // Encoding or fixing the slashes would not make this one valid.
+    assert_refused_with(
+        "http:user:secret@host:99999",
+        "invalid proxy: ***@host:99999",
+        "not a valid proxy URL",
+    )
+}
+
+#[test]
+fn a_user_the_parser_found_gets_no_hint() -> Result<(), Box<dyn std::error::Error>> {
+    assert_refused_with(
+        "http://user:pw@proxy:8080/@x",
+        "invalid proxy: http://***@x",
+        "not a valid proxy URL",
+    )
+}
+
+#[test]
+fn a_backslash_in_a_password_is_to_be_encoded_for_http_and_not_for_socks()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_refused_with(
+        "http://user:a\\b@host:8080",
+        "invalid proxy: http://***@host:8080",
+        PERCENT_ENCODE_HINT_SPECIAL,
+    )?;
+    let list = ProxyList::new(["http://user:a%5Cb@host:8080"])?;
+    assert_eq!(
+        list.iter_redacted().collect::<Vec<_>>(),
+        ["http://***@host:8080/"]
+    );
+
+    Ok(())
+}
+
+#[cfg(feature = "socks")]
+#[test]
+fn a_backslash_in_a_socks_password_is_accepted() -> Result<(), Box<dyn std::error::Error>> {
+    let list = ProxyList::new(["socks5://user:a\\b@host:1080"])?;
+
+    assert_eq!(
+        list.iter().collect::<Vec<_>>(),
+        ["socks5://user:a%5Cb@host:1080"]
+    );
+    assert_eq!(
+        list.iter_redacted().collect::<Vec<_>>(),
+        ["socks5://***@host:1080/"]
+    );
+
+    Ok(())
 }
 
 #[test]
@@ -978,14 +1056,13 @@ fn the_percent_encoding_hint_goes_to_entries_it_fixes() -> Result<(), Box<dyn st
         ),
         ("user:pw://x@host:80", "invalid proxy: ***@host:80"),
         ("user:p/w@ss@host:80", "invalid proxy: ***@host:80"),
-        ("user:/pw@x/../y", "invalid proxy: ***@x/../y"),
-        ("user:?pw@x/../y", "invalid proxy: ***@x/../y"),
-        ("user:#pw@x/../y", "invalid proxy: ***@x/../y"),
+        ("user:/pw@x/../y", "invalid proxy: ***@x"),
+        ("user:?pw@x/../y", "invalid proxy: ***@x"),
+        ("user:#pw@x/../y", "invalid proxy: ***@x"),
         ("http:///user:a/b@host", "invalid proxy: http://***@host"),
-        (
-            "ht\ntp://user:/pw@x/../y",
-            "invalid proxy: http://***@x/../y",
-        ),
+        ("http://host:80\\p@q", "invalid proxy: http://***@q"),
+        ("http://user:\\pw@x/./y", "invalid proxy: http://***@x"),
+        ("ht\ntp://user:/pw@x/../y", "invalid proxy: http://***@x"),
     ];
     let plain = [
         ("user:pw@host:99999", "invalid proxy: ***@host:99999"),
@@ -1011,8 +1088,6 @@ fn the_percent_encoding_hint_goes_to_entries_it_fixes() -> Result<(), Box<dyn st
             "not a valid proxy url",
             "invalid proxy: not a valid proxy url",
         ),
-        ("http://user:\\pw@x/./y", "invalid proxy: http://***@x/./y"),
-        ("http://host:80\\p@q", "invalid proxy: http://***@q"),
         (
             "socks5:///user:pw@host:1080",
             "invalid proxy: socks5://***@host:1080",
@@ -1027,7 +1102,7 @@ fn the_percent_encoding_hint_goes_to_entries_it_fixes() -> Result<(), Box<dyn st
     ];
 
     for (entry, message) in hinted {
-        assert_refused_with(entry, message, PERCENT_ENCODE_HINT)?;
+        assert_refused_with(entry, message, PERCENT_ENCODE_HINT_SPECIAL)?;
     }
     for (entry, message) in plain {
         assert_refused_with(entry, message, "not a valid proxy URL")?;
@@ -1080,7 +1155,7 @@ fn what_the_parser_normalises_is_still_accepted_and_redacted()
         (
             "http://u:p@host:8080/a/../b",
             "http://u:p@host:8080/b",
-            "http://***@host:8080/b",
+            "http://***@host:8080/",
         ),
         (
             "HTTP://U:p@HOST:8080",
@@ -1095,12 +1170,12 @@ fn what_the_parser_normalises_is_still_accepted_and_redacted()
         (
             " \t u:p@host:8080/a/./b \n",
             "http://u:p@host:8080/a/b",
-            "http://***@host:8080/a/b",
+            "http://***@host:8080/",
         ),
         (
             "http://u:p@host:80/%40",
             "http://u:p@host/%40",
-            "http://***@host/%40",
+            "http://***@host/",
         ),
     ];
 
@@ -1139,8 +1214,8 @@ fn extra_slashes_before_the_user_name_are_accepted_and_hidden()
         ("/user:pw@host", "http://user:pw@host/", "http://***@host/"),
         ("\\user:pw@host", "http://user:pw@host/", "http://***@host/"),
         ("ht\ntp:///u:pw@h", "http://u:pw@h/", "http://***@h/"),
-        ("http:////u:pw@h/p", "http://u:pw@h/p", "http://***@h/p"),
-        ("http:///u:pw@h/../x", "http://u:pw@h/x", "http://***@h/x"),
+        ("http:////u:pw@h/p", "http://u:pw@h/p", "http://***@h/"),
+        ("http:///u:pw@h/../x", "http://u:pw@h/x", "http://***@h/"),
     ];
 
     for (entry, stored, shown) in entries {
@@ -1167,5 +1242,23 @@ fn extra_slashes_before_the_user_name_are_accepted_and_hidden()
 fn an_unsupported_scheme_error_hides_the_password_after_extra_slashes() {
     let error = ProxyList::new(["ws:///u:pw@h"]).unwrap_err();
 
-    assert_eq!(error.to_string(), "invalid proxy: ws://***@h");
+    assert_eq!(error.to_string(), "invalid proxy: ws://***@h/");
+}
+
+#[test]
+fn a_scheme_with_one_slash_and_a_later_separator_is_still_accepted()
+-> Result<(), Box<dyn std::error::Error>> {
+    let entries = [
+        ("http:/u:pw@h/x://y", "http://u:pw@h/x://y"),
+        ("http:\\\\u:secret@h://", "http://u:secret@h//"),
+        ("https:/u:pw@h:8443/a://b", "https://u:pw@h:8443/a://b"),
+    ];
+
+    for (entry, stored) in entries {
+        let list = ProxyList::new([entry])?;
+
+        assert_eq!(list.iter().collect::<Vec<_>>(), [stored], "{entry:?}");
+    }
+
+    Ok(())
 }

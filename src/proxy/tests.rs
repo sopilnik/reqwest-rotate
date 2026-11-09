@@ -379,38 +379,42 @@ fn debug_output_hides_credentials() {
 }
 
 #[test]
-fn redaction_handles_urls_without_credentials() {
-    assert_eq!(redact_userinfo("http://a:8080/"), "http://a:8080/");
-    assert_eq!(redact_userinfo("http://u:p@a/"), "http://***@a/");
-    assert_eq!(redact_userinfo("socks5://u@a/"), "socks5://***@a/");
-    assert_eq!(redact_userinfo("garbage"), "garbage");
+fn redaction_shows_only_scheme_user_host_and_port() {
+    assert_eq!(redact_stored("http://a:8080/"), "http://a:8080/");
+    assert_eq!(redact_stored("http://u:p@a/"), "http://***@a/");
+    assert_eq!(redact_stored("socks5://u@a/"), "socks5://***@a/");
+    assert_eq!(redact_stored("http://:p@a/"), "http://***@a/");
+    assert_eq!(redact_stored("http://[::1]:3128/"), "http://[::1]:3128/");
+    assert_eq!(redact_stored("garbage"), "garbage");
+}
+
+#[test]
+fn redaction_drops_the_path_query_and_fragment() {
+    assert_eq!(redact_stored("http://h/@path"), "http://h/");
+    assert_eq!(redact_stored("http://u:p@h/a/b?x=@y#f"), "http://***@h/");
+    // Entries 0.2.0 stores although the password sits after the host.
     assert_eq!(
-        redact_userinfo("user:pass@proxy.example:3128"),
-        "***@proxy.example:3128"
+        redact_stored("http://http/1.2.3.4:8080:user:secret"),
+        "http://http/"
     );
     assert_eq!(
-        redact_userinfo("http://user:p@ss@proxy.example:3128"),
-        "http://***@proxy.example:3128"
-    );
-    assert_eq!(redact_userinfo("http://h/@path"), "http://h/@path");
-    assert_eq!(
-        redact_userinfo("http://u:p@h/@path?x=@y"),
-        "http://***@h/@path?x=@y"
+        redact_stored("http://proxy.example:8080@alice:123/#secret"),
+        "http://***@alice:123/"
     );
 }
 
 #[test]
 fn redaction_does_not_take_userinfo_for_a_scheme() {
-    assert_eq!(redact_userinfo("user:p@a://1@1"), "***@a://1@1");
     assert_eq!(redact_unparsable("user:p@a://1@1"), "***@1");
     assert_eq!(redact_unparsable("ftp://user:p@a://1@1"), "ftp://***@1");
     assert_eq!(redact_unparsable("user:p://x"), "user:***");
+    assert_eq!(redact_unparsable("1http://u:p@h"), "***@h");
 }
 
 #[test]
 fn redaction_reads_the_text_the_way_the_url_parser_does() {
-    assert_eq!(redact_userinfo("ht\ntp://u:p@h"), "http://***@h");
-    assert_eq!(redact_userinfo("\u{1}http://u:p@h"), "http://***@h");
+    assert_eq!(redact_entry("ht\ntp://u:p@h"), "http://***@h/");
+    assert_eq!(redact_entry("\u{1}http://u:p@h"), "http://***@h/");
 }
 
 #[test]
@@ -498,7 +502,7 @@ fn invalid_proxy_error_redacts_whole_spelling_when_password_has_question_mark() 
     // A password containing `/`, `?` or `#` makes the URL fail to
     // parse; the authority boundary is then unknown, so the whole
     // spelling up to the last `@` must be redacted, not just the part
-    // `redact_userinfo` would have guessed at.
+    // the parser would have guessed at.
     let question_mark_in_password_err = ProxyList::new(["http://user:p?ss@host:3128"]).unwrap_err();
     let question_mark_in_password = question_mark_in_password_err.to_string();
 
@@ -514,7 +518,7 @@ fn invalid_proxy_error_redacts_whole_spelling_when_password_has_question_mark() 
         std::error::Error::source(&question_mark_in_password_err)
             .unwrap()
             .to_string(),
-        PERCENT_ENCODE_HINT
+        PERCENT_ENCODE_HINT_SPECIAL
     );
 }
 
