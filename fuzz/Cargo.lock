@@ -575,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "reqwest-rotate"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "h2",
  "http",
