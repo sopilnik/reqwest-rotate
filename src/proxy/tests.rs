@@ -471,30 +471,18 @@ fn invalid_proxy_error_redacts_credentials_of_schemeless_input() {
 
 #[test]
 fn invalid_proxy_error_redacts_at_sign_in_password_with_scheme() {
-    let scheme_with_at_in_password = invalid_proxy_message("ftp://user:p@ss@host:21");
+    let message = invalid_proxy_message("ftp://user:p@ss@host:21");
 
-    assert!(
-        !scheme_with_at_in_password.contains("ss@"),
-        "{scheme_with_at_in_password}"
-    );
-    assert!(
-        scheme_with_at_in_password.contains("***@host"),
-        "{scheme_with_at_in_password}"
-    );
+    assert!(!message.contains("ss@"), "{message}");
+    assert!(message.contains("***@host"), "{message}");
 }
 
 #[test]
 fn invalid_proxy_error_redacts_at_sign_in_password_without_scheme() {
-    let schemeless_with_at_in_password = invalid_proxy_message("user:p@ss@host:99999");
+    let message = invalid_proxy_message("user:p@ss@host:99999");
 
-    assert!(
-        !schemeless_with_at_in_password.contains("ss@"),
-        "{schemeless_with_at_in_password}"
-    );
-    assert!(
-        schemeless_with_at_in_password.contains("***@host"),
-        "{schemeless_with_at_in_password}"
-    );
+    assert!(!message.contains("ss@"), "{message}");
+    assert!(message.contains("***@host"), "{message}");
 }
 
 #[test]
@@ -503,31 +491,23 @@ fn invalid_proxy_error_redacts_whole_spelling_when_password_has_question_mark() 
     // parse; the authority boundary is then unknown, so the whole
     // spelling up to the last `@` must be redacted, not just the part
     // the parser would have guessed at.
-    let question_mark_in_password_err = ProxyList::new(["http://user:p?ss@host:3128"]).unwrap_err();
-    let question_mark_in_password = question_mark_in_password_err.to_string();
+    let err = ProxyList::new(["http://user:p?ss@host:3128"]).unwrap_err();
+    let message = err.to_string();
 
-    assert!(
-        !question_mark_in_password.contains("p?ss"),
-        "{question_mark_in_password}"
-    );
+    assert!(!message.contains("p?ss"), "{message}");
+    assert_eq!(message, "invalid proxy: http://***@host:3128");
     assert_eq!(
-        question_mark_in_password,
-        "invalid proxy: http://***@host:3128"
-    );
-    assert_eq!(
-        std::error::Error::source(&question_mark_in_password_err)
-            .unwrap()
-            .to_string(),
+        std::error::Error::source(&err).unwrap().to_string(),
         PERCENT_ENCODE_HINT_SPECIAL
     );
 }
 
 #[test]
 fn invalid_proxy_error_redacts_whole_spelling_when_password_has_hash() {
-    let hash_in_password = invalid_proxy_message("user:p#ss@host:3128");
+    let message = invalid_proxy_message("user:p#ss@host:3128");
 
-    assert!(!hash_in_password.contains("p#ss"), "{hash_in_password}");
-    assert!(hash_in_password.contains("***@host:3128"));
+    assert!(!message.contains("p#ss"), "{message}");
+    assert!(message.contains("***@host:3128"));
 }
 
 #[test]
