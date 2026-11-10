@@ -48,10 +48,10 @@ and this project uses [Semantic Versioning](https://semver.org/).
   of an `InvalidProxy` error about a parsed entry, now reads
   `scheme://host:port/`, with `***@` before the host when the URL has a
   user or a password. The path, query and fragment are left out.
-- The error for a refused entry says what to change in two more cases:
-  a `\` in the password of an `http` or `https` entry is to be
-  percent-encoded as `%5C`, and `http:host:8080` is to be written with
-  `://`.
+- The error for a refused entry says what to change in more cases:
+  a `/`, `?` or `#` in the password is to be percent-encoded as `%2F`,
+  `%3F` or `%23`, a `\` in the password of an `http` or `https` entry
+  as `%5C`, and `http:host:8080` is to be written with `://`.
 
 ## [0.2.0] - 2026-09-27
 
